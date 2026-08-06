@@ -1,0 +1,11 @@
+{{ brand }}
+
+Hi {{ display_name or "there" }},
+
+Please confirm this email address so we know it's yours:
+
+  {{ verify_url }}
+
+This link expires in 24 hours.
+
+— {{ brand }}

@@ -1,0 +1,17 @@
+{{ brand }} — PC health alert
+
+{{ pcs|length }} lab PC{{ '' if pcs|length == 1 else 's' }} unreachable for {{ stale_days }}+ days:
+
+{% for pc in pcs -%}
+  · {{ pc.pc_name }} ({{ pc.host }})
+      Last seen: {{ pc.last_seen | humandate or "never" }}
+      Error:     {{ pc.last_error or "n/a" }}
+{% endfor %}
+
+Open the PCs page:
+
+  {{ dashboard_url }}
+
+You'll only get one email per PC per day until it comes back online.
+
+— {{ brand }}

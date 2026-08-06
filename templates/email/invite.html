@@ -1,0 +1,13 @@
+{% extends "_base.html" %}
+{% from "_macros.html" import p, cta_button, aside %}
+
+{% block preheader %}{{ invited_by }} added you as a {{ role_label }}. Set your password to sign in.{% endblock %}
+{% block header_title %}Welcome aboard{% endblock %}
+
+{% block body %}
+{{ p("Hi " + (display_name or "there") + ",", c) }}
+{{ p(invited_by + " added you to " + brand + " as a " + role_label + ".", c) }}
+{{ p("Set a password to activate your account. The link opens the sign-in page and lets you choose a password on the spot.", c) }}
+{{ cta_button(invite_url, "Set your password", c) }}
+{{ aside("This invitation is single-use and expires in 7 days. If you weren't expecting it, you can safely ignore this message.", c) }}
+{% endblock %}

@@ -1,0 +1,57 @@
+{#- Shared HTML shell for every email. Templates extend this and fill:
+      block preheader   inbox preview line (hidden in the body)
+      block header_title small right-aligned label in the header
+      block body        the actual message content
+    Design tokens (colors, font stack) come from Python via the `email`
+    context (see auth/emails.py). Inline styles only — mail clients strip
+    <style> blocks. Table-based layout — flex/grid don't work in Outlook. -#}
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title }}</title>
+</head>
+<body style="margin:0;padding:0;background:{{ c.bg }};">
+  <span style="display:none;font-size:1px;color:{{ c.bg }};line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{% block preheader %}{{ preheader }}{% endblock %}</span>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{{ c.bg }};padding:32px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background:{{ c.surface }};border:1px solid {{ c.border }};border-radius:10px;overflow:hidden;">
+          {#- Thin category-colored strip at the very top of the card. -#}
+          <tr><td style="height:4px;background:{{ c.accent }};line-height:0;font-size:0;">&nbsp;</td></tr>
+          <tr>
+            <td style="padding:18px 28px;border-bottom:1px solid {{ c.border }};background:{{ c.surface }};">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="font:600 15px {{ c.font }};color:{{ c.ink }};letter-spacing:-0.01em;">
+                    <span style="display:inline-block;width:22px;height:22px;background:{{ c.accent }};border-radius:5px;vertical-align:middle;margin-right:10px;"></span>{{ brand }}
+                  </td>
+                  <td align="right">
+                    <span style="display:inline-block;padding:4px 10px;background:{{ c.chip_bg }};color:{{ c.chip_fg }};border-radius:99px;font:600 10px {{ c.font }};text-transform:uppercase;letter-spacing:.08em;">
+                      {% block category_chip %}{{ c.chip_label }}{% endblock %}
+                    </span>
+                  </td>
+                </tr>
+              </table>
+              <div style="margin:12px 0 0;font:600 20px {{ c.font }};color:{{ c.ink }};letter-spacing:-0.01em;">
+                {% block header_title %}{{ title }}{% endblock %}
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 28px 24px;">
+{% block body %}{% endblock %}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 28px;border-top:1px solid {{ c.border }};background:{{ c.bg }};font:12px {{ c.font }};color:{{ c.muted }};">
+              {{ support }}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

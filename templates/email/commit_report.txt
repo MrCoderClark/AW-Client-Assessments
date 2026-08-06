@@ -1,0 +1,27 @@
+{{ brand }} — Commit run #{{ run_id }}
+
+Started: {{ started_at | humandate }}
+Ended:   {{ ended_at | humandate }}
+
+  copied     : {{ counts.copied }}
+  duplicates : {{ counts.duplicates }}
+  failed     : {{ counts.failed }}
+  eligible   : {{ counts.eligible }}
+
+{% if files -%}
+Files copied ({{ files|length }}):
+{% for f in files[:200] -%}
+  [{{ '%15s' % f.host }}]  {{ f.proposed_name or f.filename }}  ({{ '%.1f' % (f.size / 1024) }} KB)
+{% endfor %}
+{%- if files|length > 200 %}  … {{ files|length - 200 }} more
+{% endif %}
+{% else -%}
+(no files copied)
+{% endif %}
+{% if dest_folders -%}
+Destination:
+{% for d in dest_folders -%}
+  {{ d }}
+{% endfor %}
+{%- endif %}
+— {{ brand }}

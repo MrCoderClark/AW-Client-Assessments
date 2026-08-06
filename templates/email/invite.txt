@@ -1,0 +1,14 @@
+{{ brand }}
+
+Hi {{ display_name or "there" }},
+
+{{ invited_by }} added you to {{ brand }} as a {{ role_label }}.
+
+Set a password to activate your account:
+
+  {{ invite_url }}
+
+This invitation is single-use and expires in 7 days. If you weren't
+expecting it, you can safely ignore this message.
+
+— {{ brand }}

@@ -1,0 +1,28 @@
+{% extends "_base.html" %}
+{% from "_macros.html" import p, cta_button, aside %}
+
+{% block preheader %}{{ pcs|length }} PC{{ '' if pcs|length == 1 else 's' }} haven't checked in for {{ stale_days }}+ days.{% endblock %}
+{% block header_title %}PCs offline{% endblock %}
+
+{% block body %}
+<div style="margin:0 0 18px;padding:14px 16px;background:{{ c.chip_bg }};border-radius:8px;font:14px {{ c.font }};color:{{ c.chip_fg }};">
+  <strong style="display:block;margin-bottom:2px;">⚠ {{ pcs|length }} lab PC{{ '' if pcs|length == 1 else 's' }} offline for {{ stale_days }}+ day{{ '' if stale_days == 1 else 's' }}</strong>
+  Files sitting on them aren't being collected. Details below.
+</div>
+
+<ul style="margin:0 0 14px;padding-left:18px;">
+{% for pc in pcs %}
+  <li style="margin:0 0 6px;font:14px/1.5 {{ c.font }};color:{{ c.ink }};">
+    <strong>{{ pc.pc_name }}</strong>
+    <span style="color:{{ c.muted }};">({{ pc.host }})</span><br>
+    <span style="color:{{ c.muted }};font-size:12px;">
+      Last seen: {{ pc.last_seen | humandate or "never seen" }}<br>
+      Error: {{ pc.last_error or "no error recorded" }}
+    </span>
+  </li>
+{% endfor %}
+</ul>
+
+{{ cta_button(dashboard_url, "Open the PCs page", c) }}
+{{ aside("You'll only get one email per PC per day until it comes back online.", c) }}
+{% endblock %}

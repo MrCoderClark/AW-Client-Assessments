@@ -1,0 +1,44 @@
+{% extends "_base.html" %}
+{% from "_macros.html" import p, section_title, stat_card %}
+
+{% block preheader %}{{ counts.copied }} copied · {{ counts.duplicates }} duplicates · {{ counts.failed }} failed{% endblock %}
+{% block header_title %}Commit #{{ run_id }}{% endblock %}
+
+{% block body %}
+{{ p("Commit run #" ~ run_id ~ " finished at " ~ (ended_at | humandate) ~ ".", c) }}
+{{ p("Started " ~ (started_at | humandate) ~ ".", c) }}
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="6" border="0" style="margin:0 0 18px;">
+  <tr>
+    {{ stat_card("Copied",     counts.copied,     "#059669" if counts.copied else c.muted, c) }}
+    {{ stat_card("Duplicates", counts.duplicates, c.muted, c) }}
+    {{ stat_card("Failed",     counts.failed,     "#dc2626" if counts.failed else c.muted, c) }}
+    {{ stat_card("Eligible",   counts.eligible,   c.muted, c) }}
+  </tr>
+</table>
+
+{% if files %}
+  {{ section_title("Files copied", c) }}
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid {{ c.border }};border-radius:6px;overflow:hidden;">
+    {% for f in files[:200] %}
+      <tr>
+        <td style="padding:6px 8px;font:12px monospace;color:{{ c.muted }};border-bottom:1px solid {{ c.border }};">{{ f.host }}</td>
+        <td style="padding:6px 8px;font:13px {{ c.font }};color:{{ c.ink }};border-bottom:1px solid {{ c.border }};">{{ f.proposed_name or f.filename }}</td>
+        <td align="right" style="padding:6px 8px;font:12px monospace;color:{{ c.muted }};border-bottom:1px solid {{ c.border }};">{{ '%.0f' % (f.size / 1024) }} KB</td>
+      </tr>
+    {% endfor %}
+  </table>
+  {% if files|length > 200 %}
+    <p style="margin:6px 0 0;font:12px {{ c.font }};color:{{ c.muted }};">Showing 200 of {{ files|length }} files.</p>
+  {% endif %}
+{% else %}
+  <p style="margin:12px 0;font:14px {{ c.font }};color:{{ c.muted }};">No files were copied in this run.</p>
+{% endif %}
+
+{% if dest_folders %}
+  {{ section_title("Destination", c) }}
+  {% for d in dest_folders %}
+    <div style="margin:0 0 4px;font:12px monospace;color:{{ c.ink }};">{{ d }}</div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

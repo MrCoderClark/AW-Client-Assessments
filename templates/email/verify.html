@@ -1,0 +1,12 @@
+{% extends "_base.html" %}
+{% from "_macros.html" import p, cta_button, aside %}
+
+{% block preheader %}One-click confirmation to finish setting up your account.{% endblock %}
+{% block header_title %}Confirm your email{% endblock %}
+
+{% block body %}
+{{ p("Hi " + (display_name or "there") + ",", c) }}
+{{ p("Please confirm this email address so we know it's yours.", c) }}
+{{ cta_button(verify_url, "Confirm email", c) }}
+{{ aside("This link expires in 24 hours.", c) }}
+{% endblock %}
