@@ -56,7 +56,7 @@ Optional: enable Remote Desktop for headless admin (`sysdm.cpl` → Remote → A
 |---|---|---|
 | Git for Windows | latest | https://git-scm.com/download/win |
 | Python | **3.12.x** (64-bit) | https://www.python.org/downloads/windows/ — check "Add to PATH" |
-| Node.js | **20 LTS** (64-bit) | https://nodejs.org/en/download/ |
+| Node.js | **24 LTS** (64-bit) | https://nodejs.org/en/download/ |
 | nssm | 2.24 | https://nssm.cc/download — extract `win64\nssm.exe` to `C:\Windows\System32\` |
 
 Then in a fresh PowerShell (new PATH):
@@ -71,7 +71,7 @@ corepack prepare pnpm@latest --activate
 
 # Sanity check
 python --version   # 3.12.x
-node --version     # v20.x
+node --version     # v24.x
 uv --version
 pnpm --version
 nssm --version
@@ -118,7 +118,7 @@ Set-Location C:\apps\cfv
 uv run python scripts\gen_jwt_key.py --dir C:\apps\cfv\secrets
 ```
 
-The script prints four `AUTH_JWT_*` / `AUTH_REFRESH_HASH_SECRET` lines — copy them into `.env` in the next step.
+The script prints four `AUTH_JWT_*` / `AUTH_REFRESH_HASH_SECRET` lines — **paste them into `.env` exactly as printed** (quoted, forward-slash paths). `uv`'s dotenv parser silently drops every line after an unquoted backslash, so `AUTH_JWT_PRIVATE_KEY_PATH=C:\apps\...` will make the API fail to start.
 
 ### 4b · Write `C:\apps\cfv\.env`
 
@@ -151,11 +151,11 @@ EMAIL_TO=<comma-separated admins>
 EMAIL_BRAND_NAME=Client Files Viewer
 EMAIL_SUPPORT_LINE=AmericaWorks NYC · Client Files Viewer
 
-# ---- Auth (paste the four lines printed by gen_jwt_key.py in §4a) ---
-AUTH_JWT_KID=k-YYYYMM-xxxx
-AUTH_JWT_PRIVATE_KEY_PATH=C:\apps\cfv\secrets\jwt_k-YYYYMM-xxxx.pem
-AUTH_JWT_PUBLIC_KEY_PATH=C:\apps\cfv\secrets\jwt_k-YYYYMM-xxxx.pub
-AUTH_REFRESH_HASH_SECRET=<hex from gen_jwt_key.py>
+# ---- Auth (paste the four lines printed by gen_jwt_key.py in §4a exactly — quotes and forward slashes) ---
+AUTH_JWT_KID="k-YYYYMM-xxxx"
+AUTH_JWT_PRIVATE_KEY_PATH="C:/apps/cfv/secrets/jwt_k-YYYYMM-xxxx.pem"
+AUTH_JWT_PUBLIC_KEY_PATH="C:/apps/cfv/secrets/jwt_k-YYYYMM-xxxx.pub"
+AUTH_REFRESH_HASH_SECRET="<hex from gen_jwt_key.py>"
 
 # ---- Health alerter ----------------------------------------------
 PC_HEALTH_STALE_DAYS=3
@@ -268,44 +268,15 @@ If all seven pass, deployment is live.
 
 ## 8 · Ongoing updates
 
-Save as `C:\apps\cfv\scripts\update.ps1`:
+Everything in §3, §5, §6, §7 is baked into **`scripts/deploy.ps1`** — colored progress, idempotent, safe to re-run. To ship a change:
 
 ```powershell
-# Update script — pull, rebuild, migrate, restart. Run as admin.
-$ErrorActionPreference = "Stop"
-Set-Location C:\apps\cfv
-
-Write-Host "==> git pull"
-git pull --ff-only
-
-Write-Host "==> uv sync"
-uv sync
-
-Write-Host "==> pnpm install + build"
-Set-Location .\frontend
-pnpm install --frozen-lockfile
-pnpm build
-Set-Location ..
-
-Write-Host "==> alembic upgrade head"
-uv run --env-file .env alembic upgrade head
-
-Write-Host "==> restart services"
-nssm restart cfv-api
-Start-Sleep -Seconds 3
-nssm restart cfv-web
-
-Get-Service cfv-api, cfv-web
-Write-Host "==> done"
+C:\apps\cfv\scripts\deploy.ps1
 ```
 
-To ship a change:
+It pulls, `uv sync`s, rebuilds the frontend, runs migrations, registers any missing services, restarts, and health-checks. Downtime: ~5 s (API) + ~2 s (web).
 
-```powershell
-C:\apps\cfv\scripts\update.ps1
-```
-
-Downtime: ~5 seconds (`cfv-api` restart) plus ~2 seconds (`cfv-web` restart).
+You can also run it for the **first deploy** — as soon as §1, §2, §4 are done and the repo is at `C:\apps\cfv`, the script handles the rest.
 
 ---
 
