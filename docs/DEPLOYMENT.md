@@ -248,6 +248,12 @@ Get-Service cfv-api, cfv-web
 
 Confirm each says **Running**. If `cfv-api` refuses to start, look at `logs\api.err.log` — 99% of the time it's a bad `.env` value or the JWT key path being wrong.
 
+To manually restart the API later, use `-Force` so Windows also cycles the dependent web service:
+
+```powershell
+Restart-Service cfv-api -Force
+```
+
 ---
 
 ## 7 · Smoke test
