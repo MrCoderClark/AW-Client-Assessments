@@ -168,6 +168,31 @@ icacls C:\apps\cfv\.env         /inheritance:r /grant:r Administrators:F SYSTEM:
 icacls C:\apps\cfv\secrets      /inheritance:r /grant:r Administrators:F SYSTEM:F /T
 ```
 
+### 4b.1 · Save `.env` as UTF-8 **without** BOM
+
+Notepad and some other Windows editors write UTF-8 files with a BOM at the front. `uv`'s dotenv parser fails at position 0 on the BOM and **silently drops every line after it** — so the app starts up with almost no env vars set and dies with `RuntimeError: <var> is not set` on the first missing one. Symptom in `logs\api.err.log`:
+
+```
+warning: Failed to parse environment file `.env` at position 0: ﻿SMB_USER='...'
+```
+
+Prefer VS Code / Notepad++ and pick **UTF-8 without BOM** when saving. If it's already broken, strip the BOM in place:
+
+```powershell
+$path = "C:\apps\cfv\.env"
+$raw  = [System.IO.File]::ReadAllText($path)
+$raw  = $raw.TrimStart([char]0xFEFF)
+[System.IO.File]::WriteAllText($path, $raw, (New-Object System.Text.UTF8Encoding($false)))
+```
+
+Same rule applies to any single line that fails to parse (unquoted backslashes, spaces around `=`, a comment glued onto a key line): everything **after** the bad line silently drops. Confirm what uv actually sees with:
+
+```powershell
+uv run --env-file .env python -c "import os; [print(k) for k in sorted(os.environ) if k.startswith(('AUTH_','SMTP_','SMB_','DATABASE_','APP_','ALLOWED_'))]"
+```
+
+If a var you know is in the file doesn't show up, the parser died before reaching it — look at the line above.
+
 ### 4c · Postgres firewall on the DB box
 
 On `192.168.70.10`, ensure `pg_hba.conf` has an entry accepting `192.168.70.180`:
@@ -310,7 +335,7 @@ then check out the code that matches that revision and re-run `update.ps1`.
 
 | Symptom | First place to look |
 |---|---|
-| Login page 500s | `logs\api.err.log` — usually missing/malformed env var |
+| Login page 500s | `logs\api.err.log` — usually missing/malformed env var. If the log starts with `Failed to parse environment file '.env' at position 0`, the file has a UTF-8 BOM — see §4b.1 |
 | Login page never loads (blank) | `logs\web.err.log` — Node port bind or missing `.next/` build |
 | Scan works but PDFs fail to open | SMB creds — `SMB_USER`/`SMB_PASS` in `.env`, or a firewall on the source PC |
 | Emails not landing | `logs\api.out.log` — search for `email failed:` — SMTP env vars or the SMTP host blocking |
