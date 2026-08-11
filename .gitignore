@@ -43,7 +43,8 @@ pnpm-debug.log*
 Thumbs.db
 
 # ---- Runtime / logs ----
-logs/
+# Root-anchored so it doesn't swallow app routes like frontend/app/logs/.
+/logs/
 *.log
 
 # ---- Alembic scratch (leave `versions/` tracked) ----
