@@ -15,6 +15,7 @@ Run:
 """
 import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -418,17 +419,45 @@ def pdf_content(pdf_id: int, download: bool = False, ctx: AuthContext = current_
 
 # ---------- Salesforce push ------------------------------------------------
 
+_sf_log = logging.getLogger("cfv.salesforce")
+
+
 class CaseNumberReq(BaseModel):
-    case_number: str = Field(min_length=1)
+    # Case numbers are short alphanumeric (+ - . _) strings, e.g. "00039658168I",
+    # "876543217-01-01". Bound length + charset on top of the SOQL escaping.
+    case_number: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._\-]+$")
+    # Set true to file despite a client-name/account-name mismatch (see _name_matches).
+    override_name_mismatch: bool = False
 
 
 def _sf_client():
-    """Authenticated Salesforce client, or 503 when the integration isn't configured."""
+    """Authenticated Salesforce client, or 503 when the integration isn't available.
+
+    The underlying error (missing env, token failure, SF down) is logged
+    server-side; the client only sees a generic message so config internals
+    aren't disclosed.
+    """
     try:
         from sf import SFClient
         return SFClient()
     except Exception as e:
-        raise HTTPException(503, f"Salesforce not available: {e.__class__.__name__}: {e}")
+        _sf_log.warning("Salesforce client unavailable: %s: %s", e.__class__.__name__, e)
+        raise HTTPException(503, "Salesforce is not available right now. Contact IT Support.")
+
+
+def _name_matches(first: str | None, last: str | None, account_name: str | None) -> bool:
+    """True if the PDF's client name plausibly matches the resolved SF account.
+
+    Guards against filing one client's assessment onto another's record when a
+    wrong case number is entered. Lenient (substring, order-independent) so
+    nicknames/middle names don't false-alarm; a true mismatch still blocks
+    unless the caller passes override_name_mismatch.
+    """
+    acct = (account_name or "").casefold()
+    tokens = [t.strip().casefold() for t in (first or "", last or "") if t.strip()]
+    if not tokens or not acct:
+        return True  # nothing to compare — don't block
+    return all(t in acct for t in tokens)
 
 
 def _read_share_bytes(path: str) -> bytes:
@@ -500,6 +529,18 @@ def sf_push(pdf_id: int, req: CaseNumberReq, ctx: AuthContext = current_user_dep
         raise HTTPException(404, "No client found for that case number.")
     if acct["multi_account"]:
         raise HTTPException(409, "That case number maps to more than one account.")
+
+    # Safeguard: refuse to file onto a record whose name doesn't match the PDF's
+    # client, unless the caller explicitly overrides (prevents mis-filing PII).
+    # The UI catches this before send; this is the server-side backstop.
+    if not req.override_name_mismatch and not _name_matches(row["first_name"], row["last_name"], acct["name"]):
+        pdf_name = f"{row['first_name'] or ''} {row['last_name'] or ''}".strip() or "(no name)"
+        audit_emit("SALESFORCE_PUSH", actor_id=ctx.user_id, actor_type="user",
+                   target_type="pdf", target_id=str(pdf_id), outcome="denied", severity="SEC",
+                   context={"case_number": case_number, "account_id": acct["account_id"],
+                            "reason": "name_mismatch", "account_name": acct["name"], "pdf_name": pdf_name})
+        raise HTTPException(409, f'Name mismatch: this file is for "{pdf_name}", but that case '
+                                 f'number belongs to "{acct["name"]}". Confirm to send anyway.')
 
     named = PureWindowsPath(row["proposed_name"] or row["filename"])
     title, file_name = named.stem, named.name

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "./auth-provider";
-import { sfPrefill, sfResolve, sfPush, type SfResolve } from "../_lib/salesforce";
+import { sfPrefill, sfResolve, sfPush, nameMatchesAccount, type SfResolve } from "../_lib/salesforce";
 import { IconUpload } from "./icons";
 
 // Minimal shape both the PDF drawer's `Pdf` and the Files table row satisfy.
@@ -100,12 +100,29 @@ function PushDialog({ pdfs, onClose }: { pdfs: PdfLike[]; onClose: () => void })
     finally { setBusy(false); }
   };
 
+  // Once every file has a result and none failed, auto-close (and fully reset via
+  // unmount) so the case number doesn't linger for the next push. Errors keep it open.
+  useEffect(() => {
+    if (!results || busy) return;
+    const allDone = pdfs.every((p) => results[p.id]);
+    const anyError = pdfs.some((p) => results[p.id] === "error");
+    if (allDone && !anyError) {
+      const t = setTimeout(onClose, 1600);
+      return () => clearTimeout(t);
+    }
+  }, [results, busy, pdfs, onClose]);
+
+  // Client-side backstop for mis-filing: does the resolved account name match
+  // the client on these PDFs? (All grouped files share one client here.)
+  const nameMismatch = !!resolved && !nameMatchesAccount(client.first_name, client.last_name, resolved.account_name);
+
   const doPush = async () => {
     setErr(null); setBusy(true);
     const out: Record<number, PushState> = {};
     setResults({});
     for (const p of pdfs) {
-      try { out[p.id] = (await sfPush(p.id, caseNumber.trim())).status; }
+      // Passing the override only when the user has been shown the mismatch warning.
+      try { out[p.id] = (await sfPush(p.id, caseNumber.trim(), nameMismatch)).status; }
       catch { out[p.id] = "error"; }
       setResults({ ...out });
     }
@@ -162,7 +179,7 @@ function PushDialog({ pdfs, onClose }: { pdfs: PdfLike[]; onClose: () => void })
               </button>
             </div>
 
-            {resolved && (
+            {resolved && !nameMismatch && (
               <div style={confirmBox}>
                 <div style={{ fontSize: 13 }}>
                   <span style={{ color: "var(--ok)", fontWeight: 700 }}>✓</span>{" "}
@@ -175,12 +192,29 @@ function PushDialog({ pdfs, onClose }: { pdfs: PdfLike[]; onClose: () => void })
               </div>
             )}
 
+            {resolved && nameMismatch && (
+              <div style={warnBox}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>⚠ Name doesn’t match</div>
+                <div style={{ fontSize: 11.5, marginTop: 3 }}>
+                  This file is for <strong>{clientName(client)}</strong>, but case number{" "}
+                  <span className="mono">{caseNumber.trim()}</span> belongs to{" "}
+                  <strong>{resolved.account_name}</strong>. Double-check the case number before sending.
+                </div>
+              </div>
+            )}
+
             {err && <div style={errBox}>{err}</div>}
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
               <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
-              <button className="btn btn-primary" onClick={doPush} disabled={busy || !resolved}>
-                {busy ? "Sending…" : `Send ${pdfs.length > 1 ? pdfs.length + " " : ""}to Salesforce`}
+              <button
+                className={`btn ${nameMismatch ? "btn-danger" : "btn-primary"}`}
+                onClick={doPush}
+                disabled={busy || !resolved}
+              >
+                {busy ? "Sending…"
+                  : nameMismatch ? "Send anyway"
+                  : `Send ${pdfs.length > 1 ? pdfs.length + " " : ""}to Salesforce`}
               </button>
             </div>
           </>
@@ -229,3 +263,4 @@ const inputStyle: React.CSSProperties = { flex: 1, height: 34, padding: "0 10px"
 const confirmBox: React.CSSProperties = { marginTop: 14, padding: "10px 12px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 };
 const listBox: React.CSSProperties = { padding: "8px 12px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 };
 const errBox: React.CSSProperties = { marginTop: 12, padding: "8px 12px", background: "var(--err-soft)", color: "var(--err)", borderRadius: 4, fontSize: 12 };
+const warnBox: React.CSSProperties = { marginTop: 14, padding: "10px 12px", background: "#fff7ed", color: "#9a3412", border: "1px solid #fdba74", borderRadius: 4 };

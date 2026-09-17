@@ -185,10 +185,107 @@ RS256). I'll add `scripts/sf_smoke.py` for this step when we build.
 3. **Mapping store** — persist name ↔ case number ↔ Account Id; auto-route repeat clients.
 4. **UI** — a "Send to Salesforce" action in the file view (rep confirms case number first time, one-click after).
 
-## Open questions for the SF admin
-- **API names** needed for the SOQL: the Assignment object's API name, its **Case
-  Number** field API name, and its **Account** lookup field. (Setup → Object
-  Manager → Assignment → Fields, or I can pull them via the describe API once the
-  smoke test connects.)
-- Confirm the integration user's object/field permissions (Assignment read,
-  ContentVersion create, Account read).
+## Resolved schema (discovered via describe against the sandbox)
+- Object: **`Assignment__c`**. Case Number is the record **`Name`** field.
+  Client account lookup is **`Participant__c`** (→ Person Account). The other
+  Account lookups (`Referral_Source__c`, `Site_Location__c`) are the org/worksite.
+- Resolve path: `Assignment__c.Name = <case number>` → `Participant__c` → Account
+  → upload a `ContentVersion` filed on that Account.
+
+---
+
+# Production security checklist (before cutover)
+
+Rank: **🔴 must do before prod · 🟠 recommended · 🟡 operational.** Items marked
+**✅ done in code** are already implemented in this repo; the rest are Salesforce
+admin / deployment config. (Numbering matches the security review.)
+
+## 1. 🔴 Dedicated least-privilege integration user
+Sandbox authenticates as an **admin** (`jclark`). Production must use a dedicated,
+least-privilege user so a stolen key can't do more than file assessments.
+
+> **This recipe is proven** in the itsupport sandbox (2026-09-17) as user
+> *Assessment Files Integration*. Full click-by-click prod runbook:
+> **`docs/SALESFORCE_PROD_SETUP.md`**. Summary:
+
+**Salesforce admin steps:**
+1. **Create the user** — Setup → **Users → New User**:
+   - **User License: standard `Salesforce`** — **not** *Salesforce Integration*.
+     The Integration license is cheaper/API-only but **blocks `Read` on standard
+     objects like Account** ("the user license doesn't allow the permission: Read
+     Accounts"), so it can't do what we need.
+   - **Profile: `Minimum Access - Salesforce`** (locked down; permissions come from
+     the permission set below). With no password set + JWT-only auth, the user can't
+     log in interactively despite the standard license.
+   - **Role:** this org **requires** a Role — create/assign a dedicated **`Integration`**
+     role (hierarchy position is irrelevant; visibility comes from View All below).
+   - **Name / Username / Email:** *Assessment Files Integration*,
+     `cfv-integration@americaworks.com` (username is global-unique; **prod has no
+     sandbox suffix**, and a user *created directly in a sandbox* also keeps its
+     plain username — only prod-copied users get `.itsupport`).
+2. **Create a permission set** — Setup → **Permission Sets → New**,
+   "CFV Salesforce Integration" (License **--None--**):
+   - **System Permissions:** **API Enabled** (only).
+   - **Object Settings:**
+     - `Assignment__c` → **Read + View All Records + View All Fields**
+     - `Account` → **Read + View All Records + View All Fields**
+     - (**ContentVersion needs no explicit permission** — file create works with the
+       standard license + Account read; verified.)
+   - **No** Create/Edit/Delete on Assignment/Account, no **Modify All Records**, no
+     "Modify All Data"/"View All Data".
+   - **Manage Assignments → Add Assignment →** the integration user.
+3. **Restrict where it can log in** (see #2) — set **Login IP Ranges** on the
+   profile to the LAN server's public/egress IP.
+4. **Authorize it for the External Client App** — app's **Policies → App Policies →
+   Select Permission Sets** → add **CFV Salesforce Integration** (least-privilege:
+   only this user has it). **Remove** the admin/System Administrator profile once the
+   integration user works.
+5. **Point the app at it** — in the production `.env`: `SF_USERNAME=<the integration
+   user's username>`. The JWT `sub` and the app authorization (step 4) must be this
+   same user. Restart the API and run `scripts/sf_smoke.py` — it should authenticate
+   as the integration user.
+
+## 2. 🔴 Lock down the External Client App
+- Set **IP Relaxation** back to **"Enforce IP restrictions"** (we relaxed it for
+  testing) and set the integration user's **Login IP Ranges** to the server IP.
+- Keep **Permitted Users = "Admin approved users are pre-authorized."**
+
+## 3. 🔴 Certificate + key hygiene
+- The signing cert is 730 days — set a **renewal reminder** now; rotate by
+  generating a new pair and re-uploading the `.crt`.
+- Restrict the `secrets/sf_jwt.key` file ACL to the service account only.
+- `secrets/` is gitignored — also exclude it from any **backup/imaging** that could
+  copy it off-box.
+
+## 4. 🟠 ✅ done in code — name-match safeguard
+`POST /api/pdfs/{id}/salesforce` refuses to file when the PDF's client name doesn't
+match the resolved account name, unless `override_name_mismatch: true` (the UI shows
+a warning and the rep must click **"Send anyway"**). Blocked attempts audit
+`SALESFORCE_PUSH` `outcome=denied`, `reason=name_mismatch`. Prevents mis-filing PII
+onto the wrong record after a mistyped case number.
+
+## 5. 🟠 ✅ done in code — no internal errors to clients
+`_sf_client()` logs the real error to `cfv.salesforce` and returns a generic 503, so
+config internals (env names, SF error bodies) aren't disclosed to callers.
+
+## 6. 🟠 ✅ done in code — case-number input validation
+`CaseNumberReq.case_number` is capped at 64 chars and `^[A-Za-z0-9._\-]+$`, on top of
+the SOQL escaping (`sf.soql_str`) — belt-and-suspenders against injection.
+
+## 7. 🟠 Minimize OAuth scopes
+The External Client App currently has `api` + `refresh_token, offline_access`. JWT
+bearer doesn't use refresh tokens — drop that scope, keep **`api`** only.
+
+## 8. 🟠 Audit / rate-limit resolve + prefill
+`/api/salesforce/{resolve,prefill}` let any `salesforce:read` user map a case number
+to a client name + file list (enumeration). Consider emitting an audit event or
+applying `auth/rate_limit.py` if that exposure matters.
+
+## 9. 🟡 ✅ done in code — production guard on the write test script
+`scripts/sf_upload_test.py` (which uploads) now refuses to run unless
+`SF_LOGIN_URL` looks like a sandbox, or `--prod` is passed — so a prod `.env` can't
+be used to push test data into real client records.
+
+## 10. 🟡 Token caching (perf, not security)
+`SFClient` mints a fresh JWT per instantiation (one token exchange per request).
+Fine at rep volume; cache the access token with its expiry later if needed.

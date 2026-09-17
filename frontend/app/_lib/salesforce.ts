@@ -42,10 +42,18 @@ export async function sfResolve(caseNumber: string): Promise<SfResolve> {
   }));
 }
 
-export async function sfPush(pdfId: number, caseNumber: string): Promise<SfPushResult> {
+export async function sfPush(pdfId: number, caseNumber: string, override = false): Promise<SfPushResult> {
   return json(await apiFetch(`/api/pdfs/${pdfId}/salesforce`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ case_number: caseNumber }),
+    body: JSON.stringify({ case_number: caseNumber, override_name_mismatch: override }),
   }));
+}
+
+/** Mirror of the backend's _name_matches — lenient client-name/account check. */
+export function nameMatchesAccount(first: string | null, last: string | null, accountName: string | null): boolean {
+  const acct = (accountName || "").toLowerCase();
+  const toks = [first, last].map((t) => (t || "").trim().toLowerCase()).filter(Boolean);
+  if (toks.length === 0 || !acct) return true;
+  return toks.every((t) => acct.includes(t));
 }

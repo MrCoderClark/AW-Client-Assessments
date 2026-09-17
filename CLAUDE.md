@@ -60,7 +60,9 @@ pnpm dev
 - **No new backend deps** unless a few lines can't replace them.
 - **No shadcn.** Custom components on Radix primitives + Tailwind.
 - **Real SMB, not mocks.** Test against the actual 24 PCs.
-- **Auth is live (Phase 15 M1 + M2 audit + M3 MFA + Entra SSO).** Bootstrap admin: `admin@aw.local` / `Correct-Horse-Battery-9!`. Three roles: `admin`, `operator`, `viewer`. Permissions per role in `auth/permissions.py`.
+- **Auth is live (Phase 15 M1 + M2 audit + M3 MFA + Entra SSO).** Bootstrap admin: `admin@aw.local` / `Correct-Horse-Battery-9!`. Four roles: `admin`, `operator`, `corporate_rep`, `viewer`. Permissions per role in `auth/permissions.py`. **Corporate Rep = viewer + Salesforce push** (`salesforce:read`/`salesforce:push`), no run triggers — the role for reps who file assessments into Salesforce.
+- **Salesforce push** (`docs/SALESFORCE_INTEGRATION.md`): send a committed assessment PDF onto a client's Salesforce Person Account. `sf.py` is a JWT-bearer client (server-to-server, reuses PyJWT). Flow: case number → `Assignment__c.Name` → `Participant__c` (Person Account) → upload a `ContentVersion` with title-based dedupe. Learned client↔case#↔account mapping in `sf_client_map` prefills repeat clients. Endpoints `/api/salesforce/{status,prefill,resolve}` + `POST /api/pdfs/{id}/salesforce` (audited `SALESFORCE_PUSH`); UI in the PDF drawer, per Files row, and a blue bulk button in the Files toolbar. **Name-match safeguard:** push refuses to file when the PDF's client name doesn't match the resolved account, unless `override_name_mismatch` (UI "Send anyway"). **Currently pointed at the sandbox** (`SF_*` env); **production cutover runbook** in `docs/SALESFORCE_PROD_SETUP.md` (step-by-step: External Client App "Client Assessment Files Viewer", `Integration` role, standard-license `Minimum Access` integration user, `CFV Salesforce Integration` permission set, IP lockdown) + security checklist in `docs/SALESFORCE_INTEGRATION.md`. Signing key lives in gitignored `secrets/`.
+- **Scan-time content dedupe:** `scan.py` skips indexing a PDF whose `md5`/`text_hash` already matches a non-archived row (source left in place), so duplicate downloads never become committed rows. `scripts/prune_content_dupes.py` cleans pre-existing dupes and never deletes a `dest_path` still referenced by another row.
 - **Two sign-in front doors:** `/login` is Entra SSO-only (primary); `/admin/login` is the local email+password form (break-glass / non-Microsoft accounts). Forgot-password is local-only.
 - **App 2FA (TOTP + email OTP via Resend + backup codes)** in `auth/mfa.py` / `auth/mfa_routes.py`. Global on/off via the `mfa_required` runtime setting; per-user `users.mfa_exempt`; admin reset at `POST /api/v1/users/{id}/mfa/reset`. Enrolment/challenge UI at `/mfa`.
 - **Runtime settings** (admin-flippable, no restart) live in the `app_settings` table via `auth/app_settings.py` + `/api/v1/settings` (perm `system:read`/`system:write`). Keys: `sso_login_enabled` (off = local-only), `sso_allowlist_enabled`, `mfa_required`. Surfaced in the Settings page "Access & Security" card.
@@ -73,7 +75,8 @@ pnpm dev
 
 - All v1 sprawl: Chat, AI Analysis, Favorites, Trash, Sessions, Activity Log widget bloat
 - Cloud deployment (this runs on the LAN server)
-- Mobile responsive polish (desktop-first internal tool)
+
+(Basic **mobile responsiveness shipped** — off-canvas sidebar + hamburger, topbar/grid reflow at ≤768px; still desktop-first, so deep mobile polish stays low priority.)
 
 ## When continuing work
 

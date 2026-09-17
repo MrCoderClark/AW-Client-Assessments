@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -39,7 +40,17 @@ def main() -> None:
     ap.add_argument("case_number", nargs="?", default="9876543210")
     ap.add_argument("--file", help="local PDF to upload (default: a generated test PDF)")
     ap.add_argument("--title", help="ContentVersion title (default: derived)")
+    ap.add_argument("--prod", action="store_true",
+                    help="Required to run against a non-sandbox (production) org.")
     args = ap.parse_args()
+
+    # This script WRITES. Refuse to touch production unless explicitly forced,
+    # so a prod .env can't be used to push test data into real client records.
+    login = os.environ.get("SF_LOGIN_URL", "")
+    is_sandbox = "test.salesforce.com" in login or ".sandbox." in login
+    if not is_sandbox and not args.prod:
+        sys.exit(f"Refusing to write: SF_LOGIN_URL={login!r} doesn't look like a sandbox. "
+                 f"Pass --prod to override (you almost certainly don't want to).")
 
     sf = SFClient()
     print(f"Connected (API v{sf.version}).")

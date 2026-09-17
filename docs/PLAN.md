@@ -160,6 +160,25 @@ Rescue the deferred Phase 5 chart and build it out.
 - ✅ **Runtime settings** (`app_settings` + `/api/v1/settings`): `sso_login_enabled`, `mfa_required`
 - ⬜ Deferred: session idle-timeout warning; password hygiene (HIBP / history / zxcvbn); devices/API-keys (M4/M5)
 
+## Phase 16 — Salesforce assessment push ✅ (shipped 2026-09)
+
+**Full detail in `docs/SALESFORCE_INTEGRATION.md`.** Reps push a committed assessment PDF straight onto the client's Salesforce Person Account instead of downloading + manually uploading.
+
+- ✅ `sf.py` — JWT-bearer client (server-to-server, reuses PyJWT); `SFClient` + helpers (`account_for_case_number`, `list_account_files`, `upload_file`)
+- ✅ Case number → `Assignment__c.Name` → `Participant__c` (Person Account) → `ContentVersion` upload with title-based dedupe
+- ✅ Learned client ↔ case# ↔ account mapping (`sf_client_map`, migration `c7f3a1e9b2d4`) prefills repeat clients
+- ✅ Endpoints `/api/salesforce/{status,prefill,resolve}` + `POST /api/pdfs/{id}/salesforce` (audited `SALESFORCE_PUSH`)
+- ✅ UI: PDF drawer button, per-Files-row action, blue **bulk button** in the Files toolbar (one client at a time, per-file results, portal-rendered modal)
+- ✅ New role **`corporate_rep`** (migration `d1e2f3a4b5c6`) = viewer + `salesforce:read`/`salesforce:push`, no run triggers
+- 🚧 Pointed at the **sandbox** (`SF_*` env); production cutover runbook in `docs/SALESFORCE_PROD_SETUP.md` (proven recipe: standard-license integration user + `Integration` role + `CFV Salesforce Integration` permission set + External Client App "Client Assessment Files Viewer")
+- ⬜ Multi-client bulk (per-client case-number grouping in one dialog); token caching to avoid a JWT exchange per request
+
+## Phase 16.5 — Housekeeping ✅
+
+- ✅ **Scan-time content dedupe** — `scan.py` skips a PDF whose `md5`/`text_hash` already matches a non-archived row (source left in place), so duplicate downloads never become committed rows. `scripts/prune_content_dupes.py` made safe for shared-file dupes (never deletes a `dest_path` another row still references)
+- ✅ **Mobile responsiveness** — off-canvas sidebar + hamburger, topbar/grid/toolbar reflow at ≤768px
+- ✅ Removed the "API connected" sidebar footer; Quick Actions card hidden for accounts without `run:trigger`
+
 ---
 
 ## Ideas parking lot
