@@ -21,6 +21,7 @@ _ADMIN = frozenset({
     "log:read",
     "run:read", "run:trigger",
     "schedule:read", "schedule:write",
+    "salesforce:read", "salesforce:push",
     # admin
     "user:read", "user:write", "user:invite", "user:suspend", "user:delete", "user:force_reset",
     "role:read", "role:assign",
@@ -36,6 +37,7 @@ _OPERATOR = frozenset({
     "log:read",
     "run:read", "run:trigger",
     "schedule:read",
+    "salesforce:read", "salesforce:push",
 })
 
 _VIEWER = frozenset({
@@ -46,9 +48,13 @@ _VIEWER = frozenset({
     "schedule:read",
 })
 
+# Corporate Rep = a viewer who may also push assessments to Salesforce.
+_CORPORATE_REP = _VIEWER | {"salesforce:read", "salesforce:push"}
+
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "admin": _ADMIN,
     "operator": _OPERATOR,
+    "corporate_rep": _CORPORATE_REP,
     "viewer": _VIEWER,
 }
 

@@ -37,6 +37,7 @@ from auth.notification_routes import router as notifications_router
 from auth.notifications import NotificationEvent, emit_sync, register_main_loop
 from auth.observability import RequestIdMiddleware, configure_logging
 from auth.permissions import current_user_dep, require
+from auth.audit import emit_sync as audit_emit
 from auth.profile_routes import router as profiles_router
 from auth.mfa_routes import router as mfa_router
 from auth.routes import router as auth_router
@@ -44,7 +45,10 @@ from auth.settings_routes import router as settings_router
 from auth.sso_routes import router as sso_router
 from bulk import delete_rows
 from commit import commit_all
-from db import connect, get_schedule, set_schedule
+from db import (
+    connect, get_schedule, set_schedule,
+    sf_map_get_by_case, sf_map_get_by_name, sf_map_upsert, sf_name_key,
+)
 from pcs import PCS
 from scan import scan_all
 from scheduler import compute_next_run, scheduler_loop
@@ -410,6 +414,123 @@ def pdf_content(pdf_id: int, download: bool = False, ctx: AuthContext = current_
             "Cache-Control": "private, max-age=30",
         },
     )
+
+
+# ---------- Salesforce push ------------------------------------------------
+
+class CaseNumberReq(BaseModel):
+    case_number: str = Field(min_length=1)
+
+
+def _sf_client():
+    """Authenticated Salesforce client, or 503 when the integration isn't configured."""
+    try:
+        from sf import SFClient
+        return SFClient()
+    except Exception as e:
+        raise HTTPException(503, f"Salesforce not available: {e.__class__.__name__}: {e}")
+
+
+def _read_share_bytes(path: str) -> bytes:
+    host = path.lstrip("\\").split("\\", 1)[0]
+    _register_smb_for_path(host)
+    with smbclient.open_file(path, mode="rb") as f:
+        return f.read()
+
+
+@app.get("/api/salesforce/status")
+def sf_status(_=require("salesforce:read")):
+    """Whether the Salesforce integration is configured (env present)."""
+    needed = ("SF_LOGIN_URL", "SF_CONSUMER_KEY", "SF_USERNAME", "SF_JWT_KEY_PATH")
+    return {"configured": all(os.environ.get(k) for k in needed)}
+
+
+@app.get("/api/salesforce/prefill")
+def sf_prefill(first: str = "", last: str = "", _=require("salesforce:read")):
+    """A remembered case number for this client name, if we have an unambiguous one."""
+    row = sf_map_get_by_name(connect(), sf_name_key(first, last))
+    if not row:
+        return {"case_number": None}
+    return {"case_number": row["case_number"], "account_name": row["account_name"]}
+
+
+@app.post("/api/salesforce/resolve")
+def sf_resolve(req: CaseNumberReq, _=require("salesforce:read")):
+    """Resolve a case number to its client account + existing files (read-only)."""
+    sf = _sf_client()
+    acct = sf.account_for_case_number(req.case_number.strip())
+    if not acct:
+        raise HTTPException(404, "No client found for that case number.")
+    if acct["multi_account"]:
+        raise HTTPException(409, "That case number maps to more than one account.")
+    files = sf.list_account_files(acct["account_id"])
+    return {
+        "account_id": acct["account_id"],
+        "account_name": acct["name"],
+        "is_person_account": acct["is_person_account"],
+        "files": [{"title": f["title"], "ext": f["ext"], "size": f["size"]} for f in files],
+    }
+
+
+@app.post("/api/pdfs/{pdf_id}/salesforce")
+def sf_push(pdf_id: int, req: CaseNumberReq, ctx: AuthContext = current_user_dep()):
+    """Push a committed assessment PDF to the client's Salesforce Files.
+
+    case number -> Person Account; skip if a same-titled file is already there
+    (dedupe), else upload and remember the mapping for next time. Audited.
+    """
+    if "salesforce:push" not in ctx.permissions:
+        raise HTTPException(403, "missing permission: salesforce:push")
+    case_number = req.case_number.strip()
+
+    conn = connect()
+    row = conn.execute(
+        "SELECT id, first_name, last_name, proposed_name, filename, dest_path, "
+        "committed_at, archived_at FROM pdfs WHERE id = %s", (pdf_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, "not found")
+    path = row["dest_path"]
+    if not row["committed_at"] or not path:
+        raise HTTPException(409, "Only committed files can be pushed to Salesforce.")
+
+    sf = _sf_client()
+    acct = sf.account_for_case_number(case_number)
+    if not acct:
+        raise HTTPException(404, "No client found for that case number.")
+    if acct["multi_account"]:
+        raise HTTPException(409, "That case number maps to more than one account.")
+
+    named = PureWindowsPath(row["proposed_name"] or row["filename"])
+    title, file_name = named.stem, named.name
+
+    def _remember():
+        sf_map_upsert(conn, case_number=case_number, account_id=acct["account_id"],
+                      account_name=acct["name"], first_name=row["first_name"],
+                      last_name=row["last_name"], confirmed_by=ctx.user_id)
+
+    # dedupe: same title already attached to the account?
+    if any((f["title"] or "").lower() == title.lower() for f in sf.list_account_files(acct["account_id"])):
+        _remember()
+        audit_emit("SALESFORCE_PUSH", actor_id=ctx.user_id, actor_type="user",
+                   target_type="pdf", target_id=str(pdf_id), outcome="skipped",
+                   context={"case_number": case_number, "account_id": acct["account_id"],
+                            "reason": "duplicate"})
+        return {"status": "duplicate", "account_name": acct["name"], "account_id": acct["account_id"]}
+
+    try:
+        data = _read_share_bytes(path)
+    except Exception as e:
+        raise HTTPException(502, f"Could not read file from share: {e.__class__.__name__}: {e}")
+
+    cv_id = sf.upload_file(acct["account_id"], title, file_name, data)
+    _remember()
+    audit_emit("SALESFORCE_PUSH", actor_id=ctx.user_id, actor_type="user",
+               target_type="pdf", target_id=str(pdf_id), outcome="success",
+               context={"case_number": case_number, "account_id": acct["account_id"],
+                        "content_version_id": cv_id, "title": title})
+    return {"status": "uploaded", "content_version_id": cv_id,
+            "account_name": acct["name"], "account_id": acct["account_id"]}
 
 
 def _emit_run_completion(kind: str, lines: list[str]) -> None:

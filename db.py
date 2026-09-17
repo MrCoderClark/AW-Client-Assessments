@@ -57,6 +57,74 @@ def existing_fingerprint(conn, host: str, source_path: str) -> tuple[int, str] |
     return (row["size"], mtime.isoformat(timespec="seconds") if hasattr(mtime, "isoformat") else mtime)
 
 
+def content_duplicate_exists(conn, host: str, source_path: str, md5: str, text_hash: str | None) -> bool:
+    """True if another *non-archived* row already holds this content.
+
+    Matches byte-identical (md5) OR content-identical (normalized text_hash —
+    the vendor stamps a fresh /CreationDate per download, so md5 alone misses
+    true dupes). The file's own row (same host+source_path) is excluded so a
+    plain re-scan isn't seen as its own duplicate. Archived rows are excluded
+    so a re-scanned copy of an archived file can still re-commit to today's
+    folder — mirrors the dedupe scope in commit.py.
+    """
+    row = conn.execute(
+        """
+        SELECT 1 FROM pdfs
+        WHERE archived_at IS NULL
+          AND (md5 = %s OR (text_hash IS NOT NULL AND text_hash = %s))
+          AND NOT (host = %s AND source_path = %s)
+        LIMIT 1
+        """,
+        (md5, text_hash, host, source_path),
+    ).fetchone()
+    return row is not None
+
+
+def sf_name_key(first: str | None, last: str | None) -> str:
+    """Normalized 'last|first' key for prefilling a case number from a name."""
+    return f"{(last or '').strip().lower()}|{(first or '').strip().lower()}"
+
+
+def sf_map_get_by_case(conn, case_number: str) -> dict | None:
+    return conn.execute(
+        "SELECT * FROM sf_client_map WHERE case_number = %s", (case_number,)
+    ).fetchone()
+
+
+def sf_map_get_by_name(conn, name_key: str) -> dict | None:
+    """Return the single mapping for this name_key, or None when absent/ambiguous.
+
+    If two different clients ever share a name_key we return None (ambiguous) so
+    the rep is forced to confirm rather than risk the wrong record.
+    """
+    rows = conn.execute(
+        "SELECT * FROM sf_client_map WHERE name_key = %s LIMIT 2", (name_key,)
+    ).fetchall()
+    return rows[0] if len(rows) == 1 else None
+
+
+def sf_map_upsert(conn, *, case_number: str, account_id: str, account_name: str | None,
+                  first_name: str | None, last_name: str | None, confirmed_by: str | None) -> None:
+    conn.execute(
+        """
+        INSERT INTO sf_client_map
+            (case_number, account_id, account_name, name_key, first_name, last_name, confirmed_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (case_number) DO UPDATE SET
+            account_id = EXCLUDED.account_id,
+            account_name = EXCLUDED.account_name,
+            name_key = EXCLUDED.name_key,
+            first_name = EXCLUDED.first_name,
+            last_name = EXCLUDED.last_name,
+            confirmed_by = EXCLUDED.confirmed_by,
+            confirmed_at = NOW()
+        """,
+        (case_number, account_id, account_name, sf_name_key(first_name, last_name),
+         first_name, last_name, confirmed_by),
+    )
+    conn.commit()
+
+
 def upsert(conn, **fields) -> None:
     """Upsert a discovered PDF row keyed by (host, source_path)."""
     cols = ",".join(fields)

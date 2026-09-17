@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { IconArchive, IconDashboard, IconFiles, IconLayout, IconLogs, IconMonitor, IconSettings, IconShield, IconUsers } from "./icons";
 import { Logo } from "./logo";
-import { useApp } from "./app-provider";
 import { useAuth } from "./auth-provider";
 
 // `hiddenForRoles` hides an entry from users whose `me.role` is in the list,
@@ -32,13 +31,14 @@ const NAV: NavItem[] = [
   { href: "/settings",       label: "Settings", icon: IconSettings, enabled: true, perm: "schedule:write", hiddenForRoles: [] },
 ];
 
-export function Sidebar() {
+export function Sidebar({ mobileOpen, onClose }: { mobileOpen: boolean; onClose: () => void }) {
   const pathname = usePathname();
-  const { apiReachable } = useApp();
   const { me } = useAuth();
   const perms = new Set(me?.permissions ?? []);
   return (
-    <aside className="sidebar">
+    <>
+      {mobileOpen && <div className="sidebar-backdrop" onClick={onClose} aria-hidden />}
+      <aside className={`sidebar${mobileOpen ? " sidebar--open" : ""}`}>
       <div className="sidebar-brand">
         <Logo size={28} />
         <div>
@@ -62,17 +62,13 @@ export function Sidebar() {
             </>
           );
           return enabled ? (
-            <Link key={href} href={href} className={cls}>{inner}</Link>
+            <Link key={href} href={href} className={cls} onClick={onClose}>{inner}</Link>
           ) : (
             <div key={href} className={cls} style={{ cursor: "not-allowed", opacity: 0.55 }}>{inner}</div>
           );
         })}
       </nav>
-
-      <div className="sidebar-foot">
-        <span className={`status-dot${apiReachable === false ? " off" : ""}`} />
-        <span>{apiReachable === false ? "API unreachable" : apiReachable === true ? "API connected" : "Connecting…"}</span>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

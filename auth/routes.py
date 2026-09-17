@@ -134,7 +134,7 @@ class ChangePasswordBody(BaseModel):
 
 class InviteUserBody(BaseModel):
     email: str = Field(min_length=3, max_length=254)
-    role: str = Field(pattern="^(admin|operator|viewer)$")
+    role: str = Field(pattern="^(admin|operator|corporate_rep|viewer)$")
     first_name: str = Field(default="", max_length=80)
     last_name: str = Field(default="", max_length=80)
 

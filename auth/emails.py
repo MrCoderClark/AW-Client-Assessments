@@ -230,7 +230,8 @@ def _send_via_resend(to: str, spec: MailSpec) -> tuple[bool, str]:
 # Thin wrappers that render a Jinja2 template pair and return a MailSpec.
 # One function per template so callers stay readable and typed.
 
-_ROLE_LABELS = {"admin": "Administrator", "operator": "Operator", "viewer": "Viewer"}
+_ROLE_LABELS = {"admin": "Administrator", "operator": "Operator",
+                "corporate_rep": "Corporate Rep", "viewer": "Viewer"}
 
 
 def invite_email(display_name: str, invite_url: str, invited_by: str, role: str) -> MailSpec:

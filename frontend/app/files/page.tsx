@@ -6,6 +6,7 @@ import { useApp, type Pdf } from "../_components/app-provider";
 import { useAuth } from "../_components/auth-provider";
 import { IconSearch } from "../_components/icons";
 import { PdfPanel, PdfPanelEmpty } from "../_components/pdf-drawer";
+import { SalesforceButton, SalesforceBulkButton } from "../_components/salesforce-push";
 import { apiFetch } from "../_lib/auth";
 import { displayName, fmtBytes, fmtDate, ftypeClass, ftypeLabel } from "../_components/util";
 
@@ -41,6 +42,7 @@ export default function FilesPage() {
   const { pdfs: activePdfs, loading: activeLoading, runBulk, running, runArchive, runRestore, mutationVersion } = useApp();
   const { me } = useAuth();
   const canArchive = (me?.permissions ?? []).includes("pdf:archive");
+  const canSf = (me?.permissions ?? []).includes("salesforce:push");
 
   const [archivedView, setArchivedView] = useState<ArchivedView>("false");
   const [viewPdfs, setViewPdfs] = useState<Pdf[]>([]);
@@ -215,6 +217,7 @@ export default function FilesPage() {
           </div>
         )}
         <div className="spacer" />
+        {!isArchivedView && <SalesforceBulkButton pdfs={selectedRows} primary />}
         <button
           className="btn"
           onClick={() => downloadCsv(toCSV(rows), `client-files-${new Date().toISOString().slice(0,10)}.csv`)}
@@ -277,6 +280,7 @@ export default function FilesPage() {
                         {!split && <th style={{ width: 110 }} className={thCls("mtime")} onClick={() => toggleSort("mtime")}>Modified {arrow("mtime")}</th>}
                         <th style={{ width: 110 }} className={thCls("indexed_at")} onClick={() => toggleSort("indexed_at")}>Indexed {arrow("indexed_at")}</th>
                         <th style={{ width: 100 }}>Status</th>
+                        {canSf && <th style={{ width: 150 }}></th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -315,6 +319,11 @@ export default function FilesPage() {
                                   ? <span className="pill pill-ok" title={`Committed ${p.committed_at}`}>Committed</span>
                                   : <span className="pill pill-warn">Pending</span>}
                             </td>
+                            {canSf && (
+                              <td onClick={(e) => e.stopPropagation()}>
+                                <SalesforceButton pdf={p} compact />
+                              </td>
+                            )}
                           </tr>
                         );
                       })}

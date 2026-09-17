@@ -7,7 +7,7 @@ export type UserRow = {
   first_name: string | null;
   last_name: string | null;
   display_name: string | null;
-  role: "admin" | "operator" | "viewer";
+  role: "admin" | "operator" | "corporate_rep" | "viewer";
   status: "INVITED" | "ACTIVE" | "SUSPENDED" | "DEACTIVATED" | "SOFT_DELETED";
   must_change_password: boolean;
   mfa_enrolled: boolean;

@@ -6,16 +6,23 @@
 
 import { PdfDrawer } from "../pdf-drawer";
 import { useApp } from "../app-provider";
+import { useAuth } from "../auth-provider";
 import { useState } from "react";
 import { WIDGETS } from "./widgets";
 
 export function CustomDashboard({ widgets }: { widgets: string[] }) {
   const { pdfs } = useApp();
+  const { me } = useAuth();
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  // Quick Actions has nothing to offer an account that can't trigger runs
+  // (viewers) — hide the whole card rather than show an empty read-only shell.
+  const canTrigger = (me?.permissions ?? []).includes("run:trigger");
 
   const stats: string[] = [];
   const cards: string[] = [];
   for (const key of widgets) {
+    if (key === "card_quick_actions" && !canTrigger) continue;
     const def = WIDGETS[key];
     if (!def) continue;
     if (def.kind === "stat") stats.push(key);

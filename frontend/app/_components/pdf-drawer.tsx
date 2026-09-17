@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useApp, type Pdf } from "./app-provider";
 import { displayName, ftypeClass, ftypeLabel } from "./util";
 import { apiFetch } from "../_lib/auth";
+import { SalesforceButton } from "./salesforce-push";
 
 // ponytail: same-origin via next.config rewrite; use apiFetch for auth headers.
 const API = "";
@@ -124,6 +125,7 @@ export function PdfPanel({ pdf, onClose, showClose = true, titleEl }: {
               }}>{restoring ? "Restoring…" : "Restore"}</button>
             )}
             <button className="btn" onClick={doDownload} disabled={!blobUrl}>Download</button>
+            {!isArchived && <SalesforceButton pdf={pdf} />}
             {showClose && onClose && <button className="btn" onClick={onClose}>Close</button>}
           </div>
         </div>

@@ -128,7 +128,7 @@ class UserPatch(BaseModel):
     last_name: str | None = Field(default=None, max_length=80)
     display_name: str | None = Field(default=None, max_length=160)
     email: str | None = Field(default=None, min_length=3, max_length=254)
-    role: str | None = Field(default=None, pattern="^(admin|operator|viewer)$")
+    role: str | None = Field(default=None, pattern="^(admin|operator|corporate_rep|viewer)$")
     # Empty string clears the profile assignment (matches how the client
     # sends "unassigned"); a UUID string sets it; omission leaves it alone.
     profile_id: str | None = Field(default=None)
@@ -192,7 +192,7 @@ async def list_users(
     ctx: Annotated[AuthContext, require("user:read")],
     q: str | None = None,
     status: str | None = Query(default=None, pattern="^(INVITED|ACTIVE|SUSPENDED|DEACTIVATED|SOFT_DELETED)$"),
-    role: str | None = Query(default=None, pattern="^(admin|operator|viewer)$"),
+    role: str | None = Query(default=None, pattern="^(admin|operator|corporate_rep|viewer)$"),
     include_deleted: bool = False,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),

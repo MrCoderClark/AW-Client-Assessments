@@ -49,3 +49,5 @@ Thumbs.db
 
 # ---- Alembic scratch (leave `versions/` tracked) ----
 backend/alembic/__pycache__/
+
+secrets/

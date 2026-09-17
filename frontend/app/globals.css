@@ -584,3 +584,56 @@ body {
       url("/login-background.jpg") center / cover no-repeat;
   }
 }
+
+/* ---------- Responsive: shell, topbar, grids ---------- */
+.topbar-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.topbar-menu { display: none; }   /* hamburger — mobile only */
+
+/* Stats and the dashboard 2-col reflow before the full mobile breakpoint. */
+@media (max-width: 900px) {
+  .stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .dash-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+  /* Sidebar becomes an off-canvas drawer; main content takes the full width. */
+  .shell { grid-template-columns: 1fr; }
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: 264px; max-width: 82vw;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 220ms ease;
+  }
+  /* shadow only when open, else it bleeds a strip past the off-screen panel */
+  .sidebar--open { transform: translateX(0); box-shadow: 0 18px 50px rgba(0,0,0,0.45); }
+  .sidebar-backdrop { position: fixed; inset: 0; z-index: 55; background: rgba(8,15,30,0.55); }
+
+  .topbar-menu {
+    display: grid; place-items: center;
+    width: 36px; height: 36px; flex: none;
+    background: transparent; border: 1px solid transparent; border-radius: 4px;
+    color: var(--ink); cursor: pointer;
+  }
+  .topbar-menu:hover { background: var(--bg); border-color: var(--border); }
+
+  .topbar { padding: 0 14px; gap: 8px; }
+  .page-title { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbar-actions { gap: 6px; }
+  .topbar-sep { display: none; }
+
+  /* Collapse verbose button chrome to icon-only so the row fits a phone. */
+  .topbar-actions .btn { padding: 0 9px; }
+  .topbar-actions .btn-text,
+  .topbar-actions .kbd-hint { display: none; }
+
+  /* Tighter content gutters + wrapping toolbars. */
+  .section-pad { padding: 16px 14px; }
+  .toolbar { padding: 12px 14px; flex-wrap: wrap; row-gap: 10px; }
+  .search { flex: 1 1 100%; }
+}
+
+/* Very small phones: stat tiles go single-column. */
+@media (max-width: 460px) {
+  .stat-grid { grid-template-columns: 1fr; }
+}

@@ -6,7 +6,7 @@ import { useApp } from "./app-provider";
 import { useAuth } from "./auth-provider";
 import { CommandPalette } from "./command-palette";
 import { NotificationBell } from "./notification-bell";
-import { IconPlay, IconRefresh, IconSearch, IconUpload } from "./icons";
+import { IconMenu, IconPlay, IconRefresh, IconSearch, IconUpload } from "./icons";
 
 const TITLES: Record<string, string> = {
   "/":         "Dashboard",
@@ -23,7 +23,7 @@ function initialsFor(me: { first_name?: string | null; last_name?: string | null
   return me.email.slice(0, 2).toUpperCase();
 }
 
-export function Topbar() {
+export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   const pathname = usePathname();
   const { running, run, setDrawerOpen, log } = useApp();
   const { me, logout } = useAuth();
@@ -45,27 +45,32 @@ export function Topbar() {
 
   return (
     <header className="topbar">
-      <div className="page-title">{title}</div>
+      <div className="topbar-left">
+        <button className="topbar-menu" onClick={onMenuClick} aria-label="Open navigation menu">
+          <IconMenu />
+        </button>
+        <div className="page-title">{title}</div>
+      </div>
 
       <div className="topbar-actions">
         <button className="btn" onClick={() => setPaletteOpen(true)} title="Search files & PCs (Ctrl+K)">
-          <IconSearch /> Search
-          <span className="mono mute" style={{ marginLeft: 6, fontSize: 10, border: "1px solid var(--border-strong)", borderRadius: 3, padding: "1px 5px" }}>
+          <IconSearch /> <span className="btn-text">Search</span>
+          <span className="mono mute kbd-hint" style={{ marginLeft: 6, fontSize: 10, border: "1px solid var(--border-strong)", borderRadius: 3, padding: "1px 5px" }}>
             {isMac ? "⌘K" : "Ctrl+K"}
           </span>
         </button>
         {log.length > 0 && (
           <button className="btn" onClick={() => setDrawerOpen(true)}>
-            <IconRefresh /> Log
+            <IconRefresh /> <span className="btn-text">Log</span>
           </button>
         )}
         {canTrigger && (
           <>
             <button className="btn" onClick={() => run("scan")} disabled={!!running}>
-              <IconPlay /> {running === "scan" ? "Scanning…" : "Scan"}
+              <IconPlay /> <span className="btn-text">{running === "scan" ? "Scanning…" : "Scan"}</span>
             </button>
             <button className="btn btn-primary" onClick={() => run("commit")} disabled={!!running}>
-              <IconUpload /> {running === "commit" ? "Committing…" : "Commit"}
+              <IconUpload /> <span className="btn-text">{running === "commit" ? "Committing…" : "Commit"}</span>
             </button>
           </>
         )}

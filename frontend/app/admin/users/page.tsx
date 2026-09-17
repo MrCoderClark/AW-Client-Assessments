@@ -24,7 +24,7 @@ const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
 ];
 
 const ROLE_LABELS: Record<UserRow["role"], string> = {
-  admin: "Admin", operator: "Operator", viewer: "Viewer",
+  admin: "Admin", operator: "Operator", corporate_rep: "Corporate Rep", viewer: "Viewer",
 };
 
 function statusPill(s: UserRow["status"]): { cls: string; label: string } {
@@ -123,6 +123,7 @@ function AdminUsersPageInner() {
           <option value="">All roles</option>
           <option value="admin">Admin</option>
           <option value="operator">Operator</option>
+          <option value="corporate_rep">Corporate Rep</option>
           <option value="viewer">Viewer</option>
         </select>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)" }}>
@@ -446,6 +447,7 @@ function UserDrawer({ userId, canWrite, onClose, onChanged }: {
                     >
                       <option value="admin">Admin</option>
                       <option value="operator">Operator</option>
+                      <option value="corporate_rep">Corporate Rep</option>
                       <option value="viewer">Viewer</option>
                     </select>
                   ) : ROLE_LABELS[u.role]}
@@ -615,6 +617,7 @@ function InviteModal({ open, onClose, onInvited }: {
                 <Field label="Role">
                   <select value={role} onChange={(e) => setRole(e.target.value as UserRow["role"])} style={inputStyle}>
                     <option value="viewer">Viewer</option>
+                    <option value="corporate_rep">Corporate Rep</option>
                     <option value="operator">Operator</option>
                     <option value="admin">Admin</option>
                   </select>

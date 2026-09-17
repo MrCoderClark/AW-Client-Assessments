@@ -102,9 +102,19 @@ def main() -> None:
         print(f"cluster text_hash={h[:16]}…  ({len(rows)} rows, keeping id={keeper['id']})")
         print(f"  keep:   id={keeper['id']:>4}  {keeper['dest_path']}")
         for r in extras:
-            print(f"  drop:   id={r['id']:>4}  {r['dest_path']}")
+            # A content-dedupe pointer shares the keeper's dest_path (one physical
+            # file, many rows). Deleting that file would orphan the keeper — so
+            # only delete the file when NO other surviving row references it.
+            shared = bool(
+                conn.execute(
+                    "SELECT 1 FROM pdfs WHERE dest_path = %s AND id <> %s LIMIT 1",
+                    (r["dest_path"], r["id"]),
+                ).fetchone()
+            ) if r["dest_path"] else False
+            tag = "file kept - shared by another row" if shared else "file will be deleted"
+            print(f"  drop:   id={r['id']:>4}  {r['dest_path']}   [{tag}]")
             if args.confirm:
-                if r["dest_path"]:
+                if r["dest_path"] and not shared:
                     ok, note = _delete_smb(r["dest_path"])
                     if ok:
                         ok_files += 1
@@ -112,7 +122,7 @@ def main() -> None:
                     else:
                         fail_files += 1
                         print(f"    [file-fail] {note}")
-                        continue  # don't drop the DB row if the file didn't go
+                        continue  # don't drop the DB row if its unique file didn't go
                 conn.execute("DELETE FROM pdfs WHERE id = %s", (r["id"],))
                 row_removed += 1
         print()
@@ -121,7 +131,8 @@ def main() -> None:
         conn.commit()
         print(f"[done] files_deleted={ok_files}  file_fail={fail_files}  rows_removed={row_removed}")
     else:
-        print(f"[dry-run] would delete {total_extras} file(s) + row(s). Re-run with --confirm.")
+        print(f"[dry-run] would drop {total_extras} redundant row(s); files deleted only "
+              f"where not shared (see per-row tags above). Re-run with --confirm.")
 
 
 if __name__ == "__main__":
