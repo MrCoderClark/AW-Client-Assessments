@@ -459,3 +459,128 @@ body {
 }
 
 .tbl tr.row-selected td { background: var(--accent-soft); }
+
+/* ============================================================
+   Split login (America Works brand panel + sign-in card)
+   Matches docs/Designs/mock-login-page.png
+   ============================================================ */
+.login-split {
+  display: flex;
+  min-height: 100vh;
+  overflow: hidden;            /* clip the oversized arc circle */
+  background: var(--bg);
+}
+
+/* Left: navy brand panel */
+.login-brand {
+  position: relative;
+  flex: 0 0 44%;
+  max-width: 620px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 56px 52px;
+  color: #eaf1fb;
+  /* America Works campus photo, darkened with a navy overlay so the white
+     headline + light copy stay legible over the bright glass/sky. */
+  background:
+    linear-gradient(160deg, rgba(11,30,63,0.90) 0%, rgba(11,30,63,0.58) 48%, rgba(8,23,51,0.90) 100%),
+    url("/login-background.jpg") center / cover no-repeat;
+  isolation: isolate;
+}
+.login-brand-logo {
+  width: 210px;
+  max-width: 60%;
+  height: auto;
+  margin-bottom: 40px;
+  /* the asset ships on transparent bg; a soft glow lifts it off the navy */
+  filter: drop-shadow(0 2px 10px rgba(0,0,0,0.25));
+}
+.login-brand-title {
+  font-size: clamp(30px, 3.4vw, 46px);
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 18px;
+}
+.login-brand-title .accent { color: #6ea8e6; }
+.login-brand-sub {
+  font-size: 15px;
+  line-height: 1.55;
+  color: #b9c9e2;
+  max-width: 340px;
+}
+.login-brand-feats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12.5px;
+  color: #c3d2ea;
+}
+.login-brand-feats .feat { display: inline-flex; align-items: center; gap: 7px; }
+.login-brand-feats .feat svg { opacity: 0.9; }
+.login-brand-feats .sep { width: 1px; height: 16px; background: rgba(255,255,255,0.25); }
+
+/* Right: light panel holding the card, with a convex arc seam */
+.login-right {
+  position: relative;
+  flex: 1 1 56%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+}
+/* Oversized circle whose LEFT edge sits just past the seam → a gentle convex
+   white arc that bulges ~60px into the navy at mid-height (like the mock).
+   Anchoring by the left edge (not the center) keeps the bulge shallow instead
+   of painting the whole left half of the circle over the navy panel. */
+.login-arc {
+  position: absolute;
+  top: 50%;
+  left: -60px;
+  width: 200vh;
+  height: 200vh;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: -22px 0 0 0 rgba(110,168,230,0.18);   /* pale-blue rim like the mock */
+  pointer-events: none;
+  z-index: 0;
+}
+.login-card {
+  position: relative;
+  z-index: 1;
+  width: min(430px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 30px 32px 26px;
+  box-shadow: 0 30px 70px rgba(15,23,41,0.14);
+}
+.login-card-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+.login-card-brand span {
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+/* Narrow screens: drop the split brand panel + arc, and float the card over
+   the same campus photo (heavier navy overlay for contrast) so mobile still
+   reads as America Works rather than a bare card on grey. */
+@media (max-width: 860px) {
+  .login-brand { display: none; }
+  .login-arc { display: none; }
+  .login-right {
+    flex-basis: 100%;
+    padding: 20px 16px;
+    background:
+      linear-gradient(160deg, rgba(11,30,63,0.92) 0%, rgba(11,30,63,0.72) 50%, rgba(8,23,51,0.94) 100%),
+      url("/login-background.jpg") center / cover no-repeat;
+  }
+}

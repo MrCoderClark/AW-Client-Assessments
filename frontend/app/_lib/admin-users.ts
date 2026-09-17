@@ -11,6 +11,7 @@ export type UserRow = {
   status: "INVITED" | "ACTIVE" | "SUSPENDED" | "DEACTIVATED" | "SOFT_DELETED";
   must_change_password: boolean;
   mfa_enrolled: boolean;
+  mfa_exempt: boolean;
   email_verified: boolean;
   ver: number;
   failed_login_attempts: number;
@@ -58,12 +59,20 @@ export async function updateUser(id: string, patch: Partial<{
   email: string; role: string;
   /** Empty string clears the profile assignment; a UUID sets it. */
   profile_id: string;
+  /** Exempt this user from the 2FA requirement. */
+  mfa_exempt: boolean;
 }>): Promise<UserRow> {
   return json(await apiFetch(`/api/v1/users/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   }));
+}
+
+/** Clear a user's 2FA (lost-device support). They re-enrol on next login if
+ *  2FA is still required for them. */
+export async function resetUserMfa(id: string): Promise<UserRow> {
+  return json(await apiFetch(`/api/v1/users/${id}/mfa/reset`, { method: "POST" }));
 }
 
 export async function suspendUser(id: string, reason: string): Promise<UserRow> {

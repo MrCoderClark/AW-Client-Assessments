@@ -52,6 +52,9 @@ export type Me = {
   status: string;
   permissions: string[];
   must_change_password: boolean;
+  /** True when this account is linked to Entra (SSO). Drives logout routing:
+   *  SSO users sign out through Entra's end_session; local users clear locally. */
+  sso: boolean;
   profile: { id: string; name: string; layout_key: string } | null;
   /** Per-user widget composition override. null = use profile default. */
   dashboard_widgets: string[] | null;
@@ -117,7 +120,20 @@ export async function refresh(): Promise<boolean> {
   return pendingRefresh;
 }
 
-export async function login(email: string, password: string, remember: boolean): Promise<Me> {
+export type MfaPurpose = "verify" | "enroll";
+
+/** Primary auth result: either a live session, or a pending MFA challenge
+ *  (the signed challenge rides an HttpOnly cookie the /mfa/* endpoints read). */
+export type LoginOutcome =
+  | { kind: "session"; me: Me }
+  | { kind: "mfa"; purpose: MfaPurpose };
+
+async function consumeSession(j: LoginResponse): Promise<Me> {
+  set({ token: j.access_token, expiresAt: Date.now() + j.expires_in * 1000 });
+  return (await apiFetch("/api/v1/auth/me").then((rr) => rr.json())) as Me;
+}
+
+export async function login(email: string, password: string, remember: boolean): Promise<LoginOutcome> {
   const r = await raw("/api/v1/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -127,10 +143,42 @@ export async function login(email: string, password: string, remember: boolean):
     const j = await r.json().catch(() => ({}));
     throw new Error(j.detail || j.title || `HTTP ${r.status}`);
   }
-  const j: LoginResponse = await r.json();
-  set({ token: j.access_token, expiresAt: Date.now() + j.expires_in * 1000 });
-  const me = await apiFetch("/api/v1/auth/me").then((rr) => rr.json());
-  return me as Me;
+  const j = await r.json();
+  if (j.mfa_required) return { kind: "mfa", purpose: j.mfa_purpose as MfaPurpose };
+  return { kind: "session", me: await consumeSession(j) };
+}
+
+// -------- MFA challenge flow (no access token yet — cfv_mfa cookie is the credential) --------
+
+export async function mfaChallenge(): Promise<{ purpose: MfaPurpose }> {
+  const r = await raw("/api/v1/auth/mfa/challenge");
+  if (!r.ok) throw new Error("no_challenge");
+  return r.json();
+}
+
+export async function mfaEnrollStart(): Promise<{ secret: string; otpauth_uri: string }> {
+  const r = await postJson("/api/v1/auth/mfa/enroll/start", {});
+  await throwIfBad(r);
+  return r.json();
+}
+
+export async function mfaEnrollVerify(code: string): Promise<{ me: Me; backupCodes: string[] }> {
+  const r = await postJson("/api/v1/auth/mfa/enroll/verify", { code });
+  await throwIfBad(r);
+  const j = await r.json();
+  return { me: await consumeSession(j), backupCodes: (j.backup_codes ?? []) as string[] };
+}
+
+export async function mfaEmailSend(): Promise<boolean> {
+  const r = await postJson("/api/v1/auth/mfa/email/send", {});
+  await throwIfBad(r);
+  return Boolean((await r.json()).ok);
+}
+
+export async function mfaVerify(code: string, method: "totp" | "email" | "backup"): Promise<Me> {
+  const r = await postJson("/api/v1/auth/mfa/verify", { code, method });
+  await throwIfBad(r);
+  return consumeSession(await r.json());
 }
 
 export async function logout(): Promise<void> {

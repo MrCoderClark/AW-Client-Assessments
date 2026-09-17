@@ -1,6 +1,7 @@
 # Phase 15 — Authentication Platform
 
-**Status:** M1 shipped + M2 ✅ complete · **Owner:** Joe · **Last updated:** 2026-08-03
+**Status:** M1 + M2 ✅ · M3 (2FA) ✅ · Entra SSO ✅ (2026-09-16) · **Owner:** Joe · **Last updated:** 2026-09-16
+See the **"Shipped after M2 (2026-09-16 session)"** table + the audit-lock gotcha below for the latest work.
 
 Three-part document: **SRS** (what it must do) → **TDD** (how it works) → **Implementation plan** (build order, milestones).
 
@@ -55,10 +56,29 @@ M1 (**auth spine**) is complete end-to-end and Postman-testable. **M2 is complet
 |---|---|
 | **M1 — auth spine** | ✅ shipped (branches 22–28) |
 | **M2 — ops-safe basics** | ✅ shipped (branches 29–33). |
-| M3 — MFA + password hygiene | ⬜ not started (TOTP, backup codes, HIBP, history, zxcvbn) |
+| **M3 — MFA (2FA)** | ✅ shipped 2026-09-16 (TOTP + email OTP via Resend + backup codes + global-force + per-user exempt + admin reset). Password hygiene (HIBP/history/zxcvbn) still deferred. |
+| **Entra SSO** | ✅ shipped 2026-09-16 — see `docs/ENTRA_SSO.md`. |
 | M4 — devices + admin dashboard + risk-lite | ⬜ not started |
 | M5 — API keys | ⬜ not started |
 | M6+ | Backlog (SMS, ABAC, GraphQL, teams, WebAuthn, ML risk, etc.) |
+
+### Shipped after M2 (2026-09-16 session)
+
+| Area | What landed |
+|---|---|
+| **Entra SSO** | Backend-driven OIDC (Auth Code + PKCE). `auth/sso.py` + `auth/sso_routes.py`: `/sso/config,/login,/callback,/logout`. JIT-provision (viewer) / link-by-email / find-by-oid; single-tenant lock; id_token verified via PyJWKClient. Migration `e5f6a1b2c3d4` (`users.sso_provider/subject/tenant`). RP-initiated logout through Entra `end_session`; `MePayload.sso` drives logout routing. Full spec + "what shipped" in `docs/ENTRA_SSO.md`. `scripts/sso_smoke.py`. |
+| **Login UX** | Two front doors: `/login` (Entra-only, split-panel America Works brand design) and `/admin/login` (local password). Shared `login-card.tsx`. Forgot-password is local-only. |
+| **Runtime settings** | `app_settings` table (migration `f6a1b2c3d4e5`) + `auth/app_settings.py` + `auth/settings_routes.py` (`GET/PATCH /api/v1/settings`, perm `system:read/write`). Keys: `sso_login_enabled` (off ⇒ Microsoft sign-in blocked, local-only), `sso_allowlist_enabled`, `mfa_required`. Surfaced on the dedicated **`/admin/security`** page (admin-only), split out of `/settings` to declutter. |
+| **SSO allowlist** | `sso_allowlist` table (migration `b2c3d4e5f7a8`) + `app_settings.is_sso_allowed/sso_allowlist_page/sso_allowlist_add_many/remove` + `/api/v1/settings/sso-allowlist` (`GET ?q&limit&offset` search+paginate, `POST {emails:[…]}` bulk add, `DELETE /{email}`). When `sso_allowlist_enabled` is on, the SSO callback rejects any email not on the list (new or existing) → `/login?sso_error=not_allowed` ("contact IT Support"). Case-insensitive; local accounts exempt. Managed on the **Security page** (search + pagination + bulk paste — scales to large lists). Audits `SSO_ALLOWLIST_ADDED/REMOVED`. |
+| **Security page** | New `/admin/security` (nav "Security", perm `system:write`, `IconShield`) holds Sign-in (local-only + Require-2FA toggles) and the SSO allowlist manager. `auth.ts`/`admin-settings.ts` client. `/settings` reverted to scheduler-only. |
+| **MFA / 2FA** | `auth/totp.py` (pure-Python RFC 6238; secret Fernet-encrypted with `AUTH_REFRESH_HASH_SECRET`), `auth/mfa.py` (MfaService: enrol, TOTP/email/backup verify, challenge lifecycle, backup codes, admin reset), `auth/mfa_routes.py` (`/mfa/challenge,/enroll/start,/enroll/verify,/email/send,/verify`). Login + SSO both gate through `AuthService.finish_primary_auth` → full session or a signed `cfv_mfa` challenge cookie → `/mfa` UI (QR via `qrcode`). Migration `a1b2c3d4e5f7` (`users.mfa_exempt`, `mfa_challenges.purpose/email_code_*`). `LoginResult` replaces the raw token body on `/login`. Admin Users drawer: Reset 2FA + exempt toggle. `scripts/mfa_smoke.py` (18 checks). |
+| **Email via Resend** | `auth/emails.py::send_mail` prefers the Resend HTTP API (`RESEND_API_KEY`), falls back to SMTP. |
+| **Dashboard customize** | `PATCH /api/v1/auth/me/dashboard` + the frontend Customize button gated to `system:write` (admin-only). |
+| **Admin update fix** | `PATCH /api/v1/users/{id}` no longer emits a double `ver = ver + 1` (Postgres syntax error → 500 when a role change arrived with the unchanged email); email branch now no-ops when the address is unchanged. Regression in `admin_users_smoke.py`. |
+
+### Gotcha: audit advisory-lock self-deadlock (2026-09-16)
+
+`auth/audit.py::emit` takes `pg_advisory_xact_lock` per write to serialize the hash chain. **Always call `emit(None, ...)`** (own committed tx). Passing the *request* connection holds the lock for the entire request; a later `emit(None)` in the same request then blocks on a lock its own request holds → self-deadlock, and the stuck `idle in transaction` connection poisons the lock for **every** other request (all logins hang). This bit the SSO-provision→MFA-challenge path; fixed by moving all such emits to `emit(None)`. Also: PyJWKClient's JWKS fetch is blocking urllib — it now runs via `anyio.to_thread` so it can't freeze the event loop or leak a DB connection on cancellation.
 
 ### Alembic revision graph (as of now)
 
@@ -67,7 +87,19 @@ M1 (**auth spine**) is complete end-to-end and Postman-testable. **M2 is complet
      ↓
 6c342edcdb59  app tables from sqlite (pdfs, scan_runs, pc_status, schedule)
      ↓
-56bd941a6dbd  pdfs.text_hash for content dedupe   ← current head
+56bd941a6dbd  pdfs.text_hash for content dedupe
+     ↓
+a1b2c3d4e5f6  notifications   →   b2c3d4e5f6a1  pdfs archive cols   →   c3d4e5f6a1b2  profiles
+     ↓
+d4e5f6a1b2c3  user dashboard widgets
+     ↓
+e5f6a1b2c3d4  users SSO identity (Entra)
+     ↓
+f6a1b2c3d4e5  app_settings (runtime toggles)
+     ↓
+a1b2c3d4e5f7  users.mfa_exempt + mfa_challenges email-OTP
+     ↓
+b2c3d4e5f7a8  sso_allowlist (restrict SSO to listed emails)   ← current head
 ```
 
 ### Files on disk (auth surface, for quick orientation)
@@ -79,21 +111,28 @@ auth/
   middleware.py   passwords.py     permissions.py   random.py
   routes.py       service.py       services.py       ← compat re-export shim
   sessions.py     settings.py      token_state.py   tokens.py
+  sso.py          sso_routes.py    ← Entra SSO (OIDC adapter + /sso routes)
+  mfa.py          mfa_routes.py    totp.py           ← app 2FA (TOTP/email/backup)
+  app_settings.py settings_routes.py ← runtime toggles (/api/v1/settings)
 scripts/
   audit_smoke.py           auth_smoke.py         backfill_text_hash.py
   create_admin.py          create_db.py          db_ping.py
   endpoints_smoke.py       gen_jwt_key.py        invite_flow_smoke.py
   invite_user.py           migrate_from_sqlite.py prune_content_dupes.py
   rbac_smoke.py            token_smoke.py        verify_audit_chain.py
+  sso_smoke.py             mfa_smoke.py          admin_users_smoke.py
 backend/alembic/versions/
-  89986958c76a_initial_auth_schema.py
-  6c342edcdb59_app_tables_from_sqlite.py
-  56bd941a6dbd_pdfs_text_hash_for_content_dedupe.py
+  89986958c76a_initial_auth_schema.py     6c342edcdb59_app_tables_from_sqlite.py
+  56bd941a6dbd_pdfs_text_hash_for_content_dedupe.py  a1b2c3d4e5f6_notifications.py
+  b2c3d4e5f6a1_pdfs_archive_columns.py    c3d4e5f6a1b2_profiles.py
+  d4e5f6a1b2c3_user_dashboard_widgets.py  e5f6a1b2c3d4_users_sso_identity.py
+  f6a1b2c3d4e5_app_settings.py            a1b2c3d4e5f7_mfa_exempt_and_email_otp.py
+  b2c3d4e5f7a8_sso_allowlist.py
 ```
 
 ### How to pick this back up next session
 
-1. Sanity check the whole surface: `uv run --env-file .env python scripts/rbac_smoke.py --email admin@aw.local --password 'Correct-Horse-Battery-9!'` (18 checks), then `endpoints_smoke.py` (9), `invite_flow_smoke.py` (11), `audit_smoke.py` (5 actions + chain verify).
+1. Sanity check the whole surface: `uv run --env-file .env python scripts/rbac_smoke.py --email admin@aw.local --password 'Correct-Horse-Battery-9!'` (18 checks), then `endpoints_smoke.py` (9), `invite_flow_smoke.py` (11), `audit_smoke.py` (5 actions + chain verify). New surfaces: `sso_smoke.py` (25, offline crypto + DB resolve), `mfa_smoke.py --admin-email … --admin-password …` (18, full 2FA flow), `admin_users_smoke.py --admin-email … --admin-password …` (incl. the role+unchanged-email regression). Some smokes log in repeatedly — if you hit a 429, they clear `rate_limit_buckets` themselves; `mfa_smoke` also resets `mfa_required` in a `finally`.
 2. Bootstrap admin creds (unchanged since branch 24): email `admin@aw.local`, password `Correct-Horse-Battery-9!`. Recreate with `scripts/create_admin.py` if lost.
 3. Restart both processes: backend `uv run --env-file .env uvicorn api:app --reload --host 0.0.0.0 --port 8000`; frontend `cd frontend && pnpm dev`.
 4. Next milestone: **M3 — MFA + password hygiene** (TOTP, backup codes, HIBP, history, zxcvbn).

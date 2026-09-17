@@ -16,6 +16,8 @@ import { IconSettings } from "./_components/icons";
 export default function Dashboard() {
   const { me } = useAuth();
   const [customizeOpen, setCustomizeOpen] = useState(false);
+  // Dashboard customization is admin-only (backend enforces system:write too).
+  const canCustomize = !!me?.permissions.includes("system:write");
 
   const widgets =
     me?.dashboard_widgets && me.dashboard_widgets.length >= 0
@@ -26,23 +28,27 @@ export default function Dashboard() {
     <>
       <CustomDashboard widgets={widgets} />
 
-      <button
-        onClick={() => setCustomizeOpen(true)}
-        title="Customize dashboard widgets"
-        style={{
-          position: "fixed", right: 24, bottom: 24, zIndex: 40,
-          display: "flex", alignItems: "center", gap: 8,
-          padding: "10px 16px",
-          background: "var(--accent)", color: "white",
-          border: "none", borderRadius: 999,
-          boxShadow: "0 2px 12px rgba(0,0,0,0.18)",
-          fontSize: 12, fontWeight: 600, cursor: "pointer",
-        }}
-      >
-        <IconSettings /> Customize
-      </button>
+      {canCustomize && (
+        <>
+          <button
+            onClick={() => setCustomizeOpen(true)}
+            title="Customize dashboard widgets"
+            style={{
+              position: "fixed", right: 24, bottom: 24, zIndex: 40,
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "10px 16px",
+              background: "var(--accent)", color: "white",
+              border: "none", borderRadius: 999,
+              boxShadow: "0 2px 12px rgba(0,0,0,0.18)",
+              fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}
+          >
+            <IconSettings /> Customize
+          </button>
 
-      <CustomizeDrawer open={customizeOpen} onClose={() => setCustomizeOpen(false)} />
+          <CustomizeDrawer open={customizeOpen} onClose={() => setCustomizeOpen(false)} />
+        </>
+      )}
     </>
   );
 }

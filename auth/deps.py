@@ -11,6 +11,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from .engine import get_conn
+from .mfa import MfaService
 from .passwords import PasswordService
 from .service import AuthService
 from .sessions import SessionService
@@ -39,6 +40,11 @@ def sessions_svc() -> SessionService:
 
 
 @lru_cache(maxsize=1)
+def mfa_service() -> MfaService:
+    return MfaService(settings())
+
+
+@lru_cache(maxsize=1)
 def auth_service() -> AuthService:
     return AuthService(
         settings(),
@@ -55,6 +61,10 @@ def dep_auth_service() -> AuthService:
 
 def dep_tokens() -> TokenService:
     return tokens()
+
+
+def dep_mfa_service() -> MfaService:
+    return mfa_service()
 
 
 def dep_sessions() -> SessionService:

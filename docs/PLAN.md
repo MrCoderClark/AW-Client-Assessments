@@ -144,22 +144,21 @@ Rescue the deferred Phase 5 chart and build it out.
 - ⬜ Weekly digest email (Monday summary — last week's totals, per-PC breakdown, files still pending)
 - ⬜ Alert email if a PC has been unreachable for >N days
 
-## Phase 15 — Authentication, roles, permissions ⬜
+## Phase 15 — Authentication, roles, permissions ✅ (shipped 2026)
 
-Deliberately last. LAN-only + single admin has been fine; only build this when a second user needs in.
+**Full detail lives in `docs/PHASE15_AUTH.md` (M1–M3) and `docs/ENTRA_SSO.md`.** Summary of what shipped:
 
-- ⬜ `users` table (id, username, password_hash (bcrypt or passlib), role, created_at, disabled_at)
-- ⬜ Login page (`/login`), session cookies (secure, httponly, sameSite=lax)
-- ⬜ Roles:
-  - `admin` — everything (user management, settings, delete-row)
-  - `operator` — scan, commit, edit client names, view all
-  - `viewer` — read-only (Dashboard, Files, PCs, Logs, PDF viewer)
-- ⬜ Per-endpoint permission decorator; per-route protection on the frontend
-- ⬜ User management page (admin only) — create / disable / reset password
-- ⬜ Password reset via email (reuses existing SMTP config)
-- ⬜ Audit log (append-only table + `/audit` page for admins): who ran scan/commit, who edited row, who changed schedule
-- ⬜ Session timeout (e.g. 8h idle) with warning
-- ⬜ Un-SOON the (still-hidden) User Management nav item
+- ✅ `users` table + JWT access tokens + opaque refresh tokens bound to `sessions` (Argon2id passwords)
+- ✅ Login (`/login` = Entra SSO; `/admin/login` = local password), secure HttpOnly refresh cookie
+- ✅ Roles `admin` / `operator` / `viewer` (fixed role→permission map in `auth/permissions.py`)
+- ✅ Per-endpoint `require(perm)` on the backend + `RequirePerm` route guards on the frontend
+- ✅ User management page (admin) — invite / suspend / reactivate / force-reset / soft+hard delete / **2FA reset + exempt**
+- ✅ Password reset + invite via email (Resend HTTP API, SMTP fallback)
+- ✅ Audit log — append-only, SHA-256 hash-chained (`audit_events`); admin viewer + CSV export
+- ✅ **Microsoft Entra SSO** (OIDC Auth Code + PKCE), runtime on/off toggle, RP-initiated logout
+- ✅ **App 2FA (M3)** — TOTP (QR) + email OTP + backup codes, global-force + per-user exempt
+- ✅ **Runtime settings** (`app_settings` + `/api/v1/settings`): `sso_login_enabled`, `mfa_required`
+- ⬜ Deferred: session idle-timeout warning; password hygiene (HIBP / history / zxcvbn); devices/API-keys (M4/M5)
 
 ---
 

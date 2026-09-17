@@ -8,6 +8,7 @@ import { useAuth } from "./auth-provider";
 
 const PUBLIC_ROUTES = new Set([
   "/login",
+  "/admin/login",
   "/accept-invite",
   "/verify-email",
   "/forgot-password",

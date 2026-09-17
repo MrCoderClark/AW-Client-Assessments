@@ -96,6 +96,22 @@ function SettingsPageInner() {
     setDirty(true);
   };
 
+  const saveField = async <K extends keyof Schedule>(key: K, value: Schedule[K]) => {
+    const prev = sched;
+    setSched((s) => s ? { ...s, [key]: value } : s);
+    try {
+      const r = await apiFetch(`${API}/api/schedule`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: typeof value === "number" ? !!value : value }),
+      });
+      setSched(await r.json());
+    } catch (e) {
+      console.error(e);
+      setSched(prev);
+    }
+  };
+
   const save = async () => {
     if (!sched) return;
     setSaving(true);
@@ -287,7 +303,7 @@ function SettingsPageInner() {
             </div>
             <label style={{ position: "relative", display: "inline-block", width: 40, height: 22 }}>
               <input type="checkbox" checked={!!sched.email_on_commit}
-                     onChange={(e) => patch({ email_on_commit: e.target.checked ? 1 : 0 })}
+                     onChange={(e) => saveField("email_on_commit", e.target.checked ? 1 : 0)}
                      style={{ opacity: 0, width: 0, height: 0 }} />
               <span style={{
                 position: "absolute", cursor: "pointer", inset: 0,
@@ -304,6 +320,7 @@ function SettingsPageInner() {
           </div>
         </div>
       </div>
+
 
       </div>{/* end left column */}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

@@ -66,6 +66,21 @@ class AuthSettings:
     rl_forgot_ip_limit: int
     rl_forgot_ip_window_seconds: int
 
+    # ---- Entra SSO (docs/ENTRA_SSO.md) ----
+    # sso_enabled is *derived*: the toggle must be on AND the three required
+    # values present. A half-configured SSO never breaks password login boot.
+    sso_enabled: bool = False
+    entra_tenant_id: str = ""
+    entra_client_id: str = ""
+    entra_client_secret: str = ""
+    entra_redirect_uri: str = ""            # empty → derived from APP_BASE_URL at use site
+    # Where Entra sends the browser after it clears its own session. Must be
+    # registered as a post-logout redirect URI on the app registration.
+    # Empty → derived as {APP_BASE_URL}/login at use site.
+    entra_post_logout_redirect_uri: str = ""
+    entra_scopes: str = "openid profile email"
+    sso_state_ttl_seconds: int = 300
+
 
 def load() -> AuthSettings:
     from pathlib import Path
@@ -78,6 +93,23 @@ def load() -> AuthSettings:
         raise RuntimeError("AUTH_REFRESH_HASH_SECRET must be hex") from e
     if len(refresh_secret) < 32:
         raise RuntimeError("AUTH_REFRESH_HASH_SECRET must decode to >= 32 bytes")
+
+    # Entra SSO: derive `sso_enabled` from the toggle + presence of the three
+    # required values. If the toggle is on but something's missing, warn and
+    # stay disabled rather than crashing the app (password login must boot).
+    entra_tenant = _opt("AUTH_ENTRA_TENANT_ID", "")
+    entra_client = _opt("AUTH_ENTRA_CLIENT_ID", "")
+    entra_secret = _opt("AUTH_ENTRA_CLIENT_SECRET", "")
+    sso_toggle = _bool("AUTH_SSO_ENABLED", False)
+    sso_ready = bool(entra_tenant and entra_client and entra_secret)
+    sso_enabled = sso_toggle and sso_ready
+    if sso_toggle and not sso_ready:
+        import logging
+        logging.getLogger("cfv.auth").warning(
+            "AUTH_SSO_ENABLED is on but AUTH_ENTRA_TENANT_ID/CLIENT_ID/CLIENT_SECRET "
+            "are not all set — SSO stays disabled; password login unaffected."
+        )
+
     return AuthSettings(
         database_url=_req("DATABASE_URL"),
         access_token_ttl_seconds=_int("AUTH_ACCESS_TTL", 15 * 60),
@@ -104,4 +136,12 @@ def load() -> AuthSettings:
         rl_forgot_email_window_seconds=_int("AUTH_RL_FORGOT_EMAIL_WINDOW", 3600),
         rl_forgot_ip_limit=_int("AUTH_RL_FORGOT_IP_LIMIT", 20),
         rl_forgot_ip_window_seconds=_int("AUTH_RL_FORGOT_IP_WINDOW", 3600),
+        sso_enabled=sso_enabled,
+        entra_tenant_id=entra_tenant,
+        entra_client_id=entra_client,
+        entra_client_secret=entra_secret,
+        entra_redirect_uri=_opt("AUTH_ENTRA_REDIRECT_URI", ""),
+        entra_post_logout_redirect_uri=_opt("AUTH_ENTRA_POST_LOGOUT_REDIRECT_URI", ""),
+        entra_scopes=_opt("AUTH_ENTRA_SCOPES", "openid profile email"),
+        sso_state_ttl_seconds=_int("AUTH_SSO_STATE_TTL", 300),
     )

@@ -38,7 +38,10 @@ from auth.notifications import NotificationEvent, emit_sync, register_main_loop
 from auth.observability import RequestIdMiddleware, configure_logging
 from auth.permissions import current_user_dep, require
 from auth.profile_routes import router as profiles_router
+from auth.mfa_routes import router as mfa_router
 from auth.routes import router as auth_router
+from auth.settings_routes import router as settings_router
+from auth.sso_routes import router as sso_router
 from bulk import delete_rows
 from commit import commit_all
 from db import connect, get_schedule, set_schedule
@@ -72,6 +75,9 @@ app = FastAPI(
 # Phase 15 auth: RFC 9457 error shape + /api/v1/auth/* endpoints + admin users
 auth_errors.register(app)
 app.include_router(auth_router)
+app.include_router(sso_router)
+app.include_router(mfa_router)
+app.include_router(settings_router)
 app.include_router(admin_users_router)
 app.include_router(profiles_router)
 app.include_router(notifications_router)
@@ -426,12 +432,45 @@ def _emit_run_completion(kind: str, lines: list[str]) -> None:
 
 
 def _sse_with_notify(kind: str, source):
+    """Background-thread + keepalive SSE wrapper for scan/commit generators.
+
+    The three BaseHTTPMiddleware layers batch inline yields via anyio memory
+    streams and only flush when the generator returns — which for a long scan
+    means the frontend sees nothing for the whole run. Running the sync
+    generator in a worker thread and pulling from a queue lets us emit a
+    keepalive comment every 15s, which forces the middleware to flush and
+    keeps the browser's fetch reader ticking.
+
+    Client disconnect ≠ scan/commit halt: the worker keeps draining until the
+    generator is done, so the DB row + notification email still land.
+    """
+    q: "_queue.Queue" = _queue.Queue()
     lines: list[str] = []
+
+    def worker() -> None:
+        try:
+            for line in source:
+                lines.append(line)
+                q.put(line)
+        except Exception as e:  # noqa: BLE001
+            q.put(f"[error] {e.__class__.__name__}: {e}")
+        finally:
+            q.put(None)
+
+    _threading.Thread(target=worker, daemon=True).start()
+
+    yield _SSE_PAD
     try:
-        for line in source:
-            lines.append(line)
+        while True:
+            try:
+                line = q.get(timeout=15)
+            except _queue.Empty:
+                yield b": keepalive\n\n"
+                continue
+            if line is None:
+                yield b"data: [DONE]\n\n"
+                return
             yield f"data: {line}\n\n".encode()
-        yield b"data: [DONE]\n\n"
     finally:
         # Emit even on early client disconnect / error — the run itself may
         # have completed even if the SSE consumer went away.
@@ -443,12 +482,20 @@ def _sse_with_notify(kind: str, source):
 
 @app.post("/api/scans")
 def start_scan(_=require("run:trigger")):
-    return StreamingResponse(_sse_with_notify("scan", scan_all()), media_type="text/event-stream")
+    return StreamingResponse(
+        _sse_with_notify("scan", scan_all()),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
 
 
 @app.post("/api/commits")
 def start_commit(_=require("run:trigger")):
-    return StreamingResponse(_sse_with_notify("commit", commit_all()), media_type="text/event-stream")
+    return StreamingResponse(
+        _sse_with_notify("commit", commit_all()),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
 
 
 # ---------- PC file-explorer ----------

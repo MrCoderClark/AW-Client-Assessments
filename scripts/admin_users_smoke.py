@@ -122,6 +122,19 @@ def main() -> None:
         assert r.json()["role"] == "operator"
         print(f"[ok] role change (ver -> {ver_after})")
 
+        # ---- regression: role + UNCHANGED email in one PATCH --------
+        # The admin drawer sends every field on save, so a role change arrives
+        # alongside the (unchanged) email. Two `ver = ver + 1` clauses in one
+        # UPDATE is a Postgres syntax error → 500 (the SSO-promote bug). This
+        # must return 200 and bump ver exactly ONCE (email branch no-ops).
+        r = c.patch(f"/api/v1/users/{uid}", headers=h,
+                    json={"role": "admin", "email": invitee_email})
+        assert r.status_code == 200, r.text
+        assert r.json()["role"] == "admin"
+        assert r.json()["ver"] == ver_after + 1, \
+            f"expected single ver bump {ver_after}->{ver_after + 1}, got {r.json()['ver']}"
+        print(f"[ok] role+unchanged-email single ver bump (ver -> {r.json()['ver']})")
+
         # ---- suspend ------------------------------------------------
         r = c.post(f"/api/v1/users/{uid}/suspend", headers=h,
                    json={"reason": "smoke test"})

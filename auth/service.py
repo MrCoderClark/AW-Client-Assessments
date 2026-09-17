@@ -15,10 +15,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
+
+if TYPE_CHECKING:
+    from .mfa import MfaService
+    from .sso import SsoClaims
 
 from .audit import AuditEvent, audit_logger
 from .context import ANONYMOUS, AuthContext
@@ -63,6 +67,11 @@ class PasswordInvalid(AuthError):
     """400 — new password fails complexity check."""
 
 
+class AccountDisabled(AuthError):
+    """403 — a resolved SSO user is suspended/deactivated/soft-deleted.
+    SSO never resurrects a disabled account (FR-SSO-09)."""
+
+
 # ---------- value objects --------------------------------------------
 
 @dataclass(frozen=True)
@@ -71,6 +80,20 @@ class TokenPair:
     access_expires_in: int
     refresh_token: str
     session_id: str
+
+
+@dataclass(frozen=True)
+class MfaChallenge:
+    challenge_id: str
+    purpose: str            # "verify" (has TOTP) | "enroll" (must set up)
+
+
+@dataclass(frozen=True)
+class LoginOutcome:
+    """Result of primary auth. Exactly one of `pair` / `mfa` is set: a full
+    session when MFA isn't needed, or a pending MFA challenge when it is."""
+    pair: TokenPair | None = None
+    mfa: MfaChallenge | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +114,10 @@ class MePayload:
     status: str
     permissions: list[str]
     must_change_password: bool
+    # True when this account is linked to an external IdP (Entra). The frontend
+    # uses it to send logout through Entra's end_session endpoint so Microsoft
+    # drops its session too, instead of silently re-authing the next visitor.
+    sso: bool
     profile: ProfileSummary | None
     # Per-user widget override. None = use the widget list defined by the
     # profile's layout_key. List = custom composition (widget-registry keys,
@@ -126,7 +153,8 @@ class AuthService:
         ip_address: str,
         user_agent: str,
         request_id: str = "",
-    ) -> TokenPair:
+        mfa: "MfaService",
+    ) -> "LoginOutcome":
         norm = email.strip().lower()
         r = await conn.execute(
             text("""
@@ -210,25 +238,56 @@ class AuthService:
             {"ip": ip_address, "id": user.id},
         )
 
-        pair = await self._issue_pair(
+        # Password OK → hand off to the MFA gate: either a full session or an
+        # MFA challenge. AUTH_LOGIN_SUCCESS is emitted only when a session is
+        # actually issued (here for the no-MFA case; in /mfa/verify otherwise).
+        outcome = await self.finish_primary_auth(
             conn,
-            user_id=str(user.id),
-            role=str(user.role),
-            ver=int(user.ver),
-            user_agent=user_agent,
-            ip_address=ip_address,
-            remember_me=remember_me,
-            parent_id=None,
+            user_id=str(user.id), role=str(user.role), ver=int(user.ver),
+            remember=remember_me, ip_address=ip_address, user_agent=user_agent,
+            request_id=request_id, mfa=mfa,
         )
-        await audit_logger().emit(
-            None,
-            _actor(actor_kind="user", user_id=str(user.id), request_id=request_id),
-            AuditEvent(action="AUTH_LOGIN_SUCCESS",
-                       target_type="user", target_id=str(user.id),
-                       context={"session_id": pair.session_id, "remember_me": remember_me}),
-            actor_ip=ip_address, user_agent=user_agent,
+        if outcome.pair is not None:
+            await audit_logger().emit(
+                None,
+                _actor(actor_kind="user", user_id=str(user.id), request_id=request_id),
+                AuditEvent(action="AUTH_LOGIN_SUCCESS",
+                           target_type="user", target_id=str(user.id),
+                           context={"session_id": outcome.pair.session_id, "remember_me": remember_me}),
+                actor_ip=ip_address, user_agent=user_agent,
+            )
+        return outcome
+
+    async def finish_primary_auth(
+        self,
+        conn: AsyncConnection,
+        *,
+        user_id: str,
+        role: str,
+        ver: int,
+        remember: bool,
+        ip_address: str,
+        user_agent: str,
+        request_id: str,
+        mfa: "MfaService",
+    ) -> "LoginOutcome":
+        """Gate a just-authenticated user through MFA. Shared by password login
+        and SSO callback. Returns a full session, or a pending MFA challenge."""
+        if await mfa.required(conn, user_id):
+            purpose = "verify" if await mfa.is_enrolled(conn, user_id) else "enroll"
+            cid = await mfa.create_challenge(conn, user_id, purpose=purpose, remember=remember)
+            await audit_logger().emit(
+                None, _actor(actor_kind="user", user_id=user_id, request_id=request_id),
+                AuditEvent(action="AUTH_MFA_CHALLENGE", target_type="user", target_id=user_id,
+                           context={"purpose": purpose}),
+                actor_ip=ip_address, user_agent=user_agent,
+            )
+            return LoginOutcome(mfa=MfaChallenge(challenge_id=cid, purpose=purpose))
+        pair = await self.issue_login(
+            conn, user_id=user_id, role=role, ver=ver,
+            ip_address=ip_address, user_agent=user_agent, remember_me=remember,
         )
-        return pair
+        return LoginOutcome(pair=pair)
 
     # ---- refresh -----------------------------------------------------
 
@@ -622,6 +681,7 @@ class AuthService:
             text("""
                 SELECT u.id, u.email, u.first_name, u.last_name, u.display_name,
                        u.role, u.status, u.must_change_password,
+                       u.sso_provider IS NOT NULL AS sso,
                        u.dashboard_widgets,
                        p.id AS profile_id, p.name AS profile_name,
                        p.layout_key AS profile_layout_key
@@ -654,6 +714,7 @@ class AuthService:
             status=str(u.status),
             permissions=sorted(resolve_for_role(str(u.role))),
             must_change_password=bool(u.must_change_password),
+            sso=bool(u.sso),
             profile=profile,
             dashboard_widgets=widgets,
         )
@@ -678,6 +739,124 @@ class AuthService:
             user_agent=user_agent, ip_address=ip_address,
             remember_me=remember_me, parent_id=None,
         )
+
+    # ---- SSO --------------------------------------------------------
+
+    async def resolve_sso_user(
+        self,
+        conn: AsyncConnection,
+        *,
+        claims: "SsoClaims",
+        ip_address: str,
+        user_agent: str,
+        request_id: str = "",
+    ) -> tuple[str, str, int]:
+        """Map verified Entra claims → a CFV user. Returns (user_id, role, ver).
+
+        Ladder (docs/ENTRA_SSO.md §6):
+          1. find by (sso_provider='entra', sso_subject=oid) — the stable link
+          2. else link by normalized email onto an existing row (role preserved)
+          3. else JIT-create a new viewer
+
+        Raises AccountDisabled for SUSPENDED/DEACTIVATED/SOFT_DELETED (never for
+        INVITED — an invited user completing onboarding via SSO is activated).
+        """
+        norm = claims.email.strip().lower()
+
+        # 1 · existing link by immutable subject
+        r = await conn.execute(
+            text("""
+                SELECT id, role, ver, status FROM users
+                WHERE sso_provider = 'entra' AND sso_subject = :sub
+            """),
+            {"sub": claims.subject},
+        )
+        row = r.first()
+        if row is not None:
+            self._assert_sso_loginable(str(row.status))
+            await audit_logger().emit(
+                None,
+                _actor(actor_kind="user", user_id=str(row.id), request_id=request_id),
+                AuditEvent(action="SSO_LOGIN_SUCCESS", target_type="user", target_id=str(row.id),
+                           context={"link": "subject"}),
+                actor_ip=ip_address, user_agent=user_agent,
+            )
+            return str(row.id), str(row.role), int(row.ver)
+
+        # 2 · link by email onto an existing local row (preserve its role)
+        r = await conn.execute(
+            text("SELECT id, role, ver, status FROM users WHERE email_normalized = :e"),
+            {"e": norm},
+        )
+        row = r.first()
+        if row is not None:
+            self._assert_sso_loginable(str(row.status))
+            await conn.execute(
+                text("""
+                    UPDATE users
+                    SET sso_provider = 'entra',
+                        sso_subject  = :sub,
+                        sso_tenant   = :tid,
+                        status       = 'ACTIVE',
+                        email_verified_at = COALESCE(email_verified_at, now()),
+                        updated_at   = now()
+                    WHERE id = :id
+                """),
+                {"sub": claims.subject, "tid": claims.tenant, "id": row.id},
+            )
+            # emit(None): audit in its own committed tx. Never pass `conn` — an
+            # audit on the request connection holds the advisory lock for the
+            # whole request and deadlocks any later emit(None) in the same request.
+            await audit_logger().emit(
+                None,
+                _actor(actor_kind="user", user_id=str(row.id), request_id=request_id),
+                AuditEvent(action="SSO_ACCOUNT_LINKED", severity="SEC",
+                           target_type="user", target_id=str(row.id),
+                           context={"tenant": claims.tenant}),
+                actor_ip=ip_address, user_agent=user_agent,
+            )
+            return str(row.id), str(row.role), int(row.ver)
+
+        # 3 · JIT-create a viewer (Entra vouches for the email → verified)
+        uid = _new_id()
+        display = claims.display_name or (
+            " ".join(p for p in (claims.first_name, claims.last_name) if p) or None
+        )
+        await conn.execute(
+            text("""
+                INSERT INTO users
+                    (id, email, email_normalized, email_verified_at,
+                     display_name, first_name, last_name,
+                     role, status, password_hash, ver,
+                     sso_provider, sso_subject, sso_tenant,
+                     created_at, updated_at)
+                VALUES
+                    (:id, :email, :norm, now(),
+                     :display, :first, :last,
+                     'viewer', 'ACTIVE', NULL, 1,
+                     'entra', :sub, :tid,
+                     now(), now())
+            """),
+            {
+                "id": uid, "email": claims.email, "norm": norm,
+                "display": display, "first": claims.first_name, "last": claims.last_name,
+                "sub": claims.subject, "tid": claims.tenant,
+            },
+        )
+        await audit_logger().emit(
+            None,   # own committed tx — see note in the link branch above
+            _actor(actor_kind="user", user_id=uid, request_id=request_id),
+            AuditEvent(action="SSO_USER_PROVISIONED", severity="SEC",
+                       target_type="user", target_id=uid,
+                       context={"email": norm, "tenant": claims.tenant, "role": "viewer"}),
+            actor_ip=ip_address, user_agent=user_agent,
+        )
+        return uid, "viewer", 1
+
+    @staticmethod
+    def _assert_sso_loginable(status: str) -> None:
+        if status in ("SUSPENDED", "DEACTIVATED", "SOFT_DELETED"):
+            raise AccountDisabled("account is not permitted to sign in")
 
     # ---- internals --------------------------------------------------
 

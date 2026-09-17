@@ -21,7 +21,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from .context import AuthContext
-from .deps import DbConn, dep_auth_service, dep_tokens
+from .deps import DbConn, dep_auth_service, dep_mfa_service, dep_tokens
+from .mfa import CHALLENGE_TTL as MFA_CHALLENGE_TTL, MfaService
 from .rate_limit import check_and_consume
 from .emails import (
     app_base_url,
@@ -38,6 +39,7 @@ from .tokens import TokenService
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 REFRESH_COOKIE = "cfv_refresh"
+MFA_COOKIE = "cfv_mfa"           # short-lived signed MFA-challenge cookie
 # ponytail: __Host- prefix requires HTTPS + Path=/ + no Domain. Use it in
 # prod behind the reverse proxy; keep a plain name in dev so Postman +
 # local frontends work.
@@ -59,6 +61,17 @@ class TokenBody(BaseModel):
     refresh_token: str
 
 
+class LoginResult(BaseModel):
+    """Either a full session (token fields set) or a pending MFA challenge
+    (`mfa_required` true + `mfa_purpose`)."""
+    mfa_required: bool = False
+    mfa_purpose: str | None = None          # "verify" | "enroll"
+    access_token: str | None = None
+    token_type: str = "Bearer"
+    expires_in: int | None = None
+    refresh_token: str | None = None
+
+
 class ProfileSummaryBody(BaseModel):
     id: str
     name: str
@@ -75,6 +88,7 @@ class MeBody(BaseModel):
     status: str
     permissions: list[str]
     must_change_password: bool
+    sso: bool
     profile: ProfileSummaryBody | None
     dashboard_widgets: list[str] | None
 
@@ -168,6 +182,19 @@ def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(REFRESH_COOKIE, path="/")
 
 
+def _set_mfa_cookie(response: Response, value: str, ttl_seconds: int) -> None:
+    import os
+    secure = os.environ.get("AUTH_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
+    response.set_cookie(
+        key=MFA_COOKIE, value=value, max_age=ttl_seconds,
+        httponly=True, secure=secure, samesite="lax", path="/",
+    )
+
+
+def _clear_mfa_cookie(response: Response) -> None:
+    response.delete_cookie(MFA_COOKIE, path="/")
+
+
 def _pair_to_body(pair: TokenPair) -> TokenBody:
     return TokenBody(
         access_token=pair.access_token,
@@ -178,13 +205,14 @@ def _pair_to_body(pair: TokenPair) -> TokenBody:
 
 # ---------- endpoints -----------------------------------------------
 
-@router.post("/login", response_model=TokenBody)
+@router.post("/login", response_model=LoginResult)
 async def login(
     body: LoginBody,
     request: Request,
     response: Response,
     conn: Annotated[AsyncConnection, DbConn],
     svc: Annotated[AuthService, Depends(dep_auth_service)],
+    mfa: Annotated["MfaService", Depends(dep_mfa_service)],
 ):
     ip = _client_ip(request)
     ua = _client_ua(request)
@@ -205,7 +233,7 @@ async def login(
                 detail=f"Too many attempts. Try again in {retry}s.",
                 headers={"Retry-After": str(retry)},
             )
-    pair = await svc.login(
+    outcome = await svc.login(
         conn,
         email=body.email,
         password=body.password,
@@ -213,14 +241,26 @@ async def login(
         ip_address=ip,
         user_agent=ua,
         request_id=rid,
+        mfa=mfa,
     )
+    if outcome.mfa is not None:
+        # Park on an MFA challenge — no session yet. The signed challenge lives
+        # in an HttpOnly cookie the /mfa/* endpoints read.
+        _set_mfa_cookie(response, mfa.sign_cookie(outcome.mfa.challenge_id),
+                        ttl_seconds=MFA_CHALLENGE_TTL)
+        return LoginResult(mfa_required=True, mfa_purpose=outcome.mfa.purpose)
+
+    pair = outcome.pair
     _set_refresh_cookie(
         response, pair.refresh_token,
         remember=body.remember,
         ttl_seconds=svc.s.refresh_remember_me_ttl_seconds if body.remember
         else svc.s.refresh_token_ttl_seconds,
     )
-    return _pair_to_body(pair)
+    return LoginResult(
+        access_token=pair.access_token, expires_in=pair.access_expires_in,
+        refresh_token=pair.refresh_token,
+    )
 
 
 @router.post("/refresh", response_model=TokenBody)
@@ -303,11 +343,12 @@ async def me(
 @router.patch("/me/dashboard", response_model=MeBody)
 async def update_my_dashboard(
     body: DashboardWidgetsBody,
-    ctx: Annotated[AuthContext, current_user_dep()],
+    ctx: Annotated[AuthContext, require("system:write")],
     conn: Annotated[AsyncConnection, DbConn],
     svc: Annotated[AuthService, Depends(dep_auth_service)],
 ):
-    """Set (or clear) the current user's custom dashboard widget list."""
+    """Set (or clear) the current user's custom dashboard widget list.
+    Admin-only (system:write) — non-admins use their profile's default layout."""
     import json as _json
     val = _json.dumps(body.widgets) if body.widgets is not None else None
     await conn.execute(

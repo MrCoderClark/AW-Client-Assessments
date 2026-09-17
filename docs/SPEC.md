@@ -131,7 +131,7 @@ Log drawer is global (right-side Radix Dialog), reachable from every page's top-
 
 ## Non-goals (right now)
 
-- Real auth (single admin, LAN-only)
+- ~~Real auth~~ — **shipped** (Phase 15): roles, Entra SSO, 2FA, audit log. See `docs/PHASE15_AUTH.md` + `docs/ENTRA_SSO.md`.
 - Mobile / tablet responsive polish
 - PDF annotation, editing, sharing
 - Team features (owners, comments, permissions)

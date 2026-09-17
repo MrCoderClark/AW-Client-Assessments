@@ -156,7 +156,14 @@ def _render(name: str, *, title: str, preheader: str = "", theme: str = "action"
 # ---------- send ----------------------------------------------------
 
 def send_mail(to: str, spec: MailSpec) -> tuple[bool, str]:
-    """Return (ok, message). Never raises; failures are logged upstream."""
+    """Return (ok, message). Never raises; failures are logged upstream.
+
+    Prefers Resend (HTTP API) when RESEND_API_KEY is set; otherwise falls back
+    to SMTP. Both paths are synchronous/blocking — callers in async contexts
+    should offload with anyio.to_thread.
+    """
+    if _cfg("RESEND_API_KEY"):
+        return _send_via_resend(to, spec)
     host = _cfg("SMTP_HOST")
     port = int(_cfg("SMTP_PORT") or "587")
     user = _cfg("SMTP_USER")
@@ -180,6 +187,43 @@ def send_mail(to: str, spec: MailSpec) -> tuple[bool, str]:
         return True, f"email sent to {to}"
     except Exception as e:
         return False, f"email failed: {e.__class__.__name__}: {e}"
+
+
+def _send_via_resend(to: str, spec: MailSpec) -> tuple[bool, str]:
+    """Send through the Resend HTTP API. Needs RESEND_API_KEY + EMAIL_FROM."""
+    import httpx
+
+    api_key = _cfg("RESEND_API_KEY")
+    email_from = _cfg("EMAIL_FROM")
+    if not (api_key and email_from):
+        return False, "email skipped: RESEND_API_KEY or EMAIL_FROM missing"
+
+    payload: dict[str, Any] = {
+        "from": email_from,
+        "to": [to],
+        "subject": spec.subject,
+        "text": spec.body,
+    }
+    if spec.html:
+        payload["html"] = spec.html
+    try:
+        r = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=15.0,
+        )
+    except Exception as e:
+        return False, f"email failed: {e.__class__.__name__}: {e}"
+    if r.status_code >= 400:
+        # Resend returns {"message": "..."} on error; don't leak the key.
+        note = ""
+        try:
+            note = str(r.json().get("message", ""))[:200]
+        except Exception:
+            note = r.text[:200]
+        return False, f"email failed: resend {r.status_code}: {note}"
+    return True, f"email sent to {to}"
 
 
 # ---------- templates ----------------------------------------------

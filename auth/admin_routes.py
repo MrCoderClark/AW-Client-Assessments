@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from .audit import AuditEvent, audit_logger
 from .context import AuthContext
-from .deps import DbConn, dep_auth_service
+from .deps import DbConn, dep_auth_service, dep_mfa_service
+from .mfa import MfaService
 from .notifications import NotificationEvent, emit_for_category
 from .emails import app_base_url, password_reset_email, send_mail
 from .permissions import require
@@ -49,7 +50,7 @@ async def _load_user(conn: AsyncConnection, user_id: str) -> dict:
         text("""
             SELECT u.id, u.email, u.email_normalized, u.first_name, u.last_name, u.display_name,
                    u.role, u.status, u.must_change_password,
-                   u.mfa_enrolled_at IS NOT NULL AS mfa_enrolled,
+                   u.mfa_enrolled_at IS NOT NULL AS mfa_enrolled, u.mfa_exempt,
                    u.email_verified_at, u.ver, u.failed_login_attempts, u.locked_until,
                    u.last_login_at, u.last_login_ip, u.suspended_at, u.suspended_reason,
                    u.deleted_at, u.created_at, u.updated_at,
@@ -100,6 +101,7 @@ class UserRow(BaseModel):
     status: str
     must_change_password: bool
     mfa_enrolled: bool
+    mfa_exempt: bool
     email_verified: bool
     ver: int
     failed_login_attempts: int
@@ -130,6 +132,8 @@ class UserPatch(BaseModel):
     # Empty string clears the profile assignment (matches how the client
     # sends "unassigned"); a UUID string sets it; omission leaves it alone.
     profile_id: str | None = Field(default=None)
+    # Exempt this user from the 2FA requirement (admin toggle).
+    mfa_exempt: bool | None = Field(default=None)
 
 
 class SuspendBody(BaseModel):
@@ -163,6 +167,7 @@ def _row_to_model(row: dict) -> UserRow:
         status=str(row["status"]),
         must_change_password=bool(row["must_change_password"]),
         mfa_enrolled=bool(row["mfa_enrolled"]),
+        mfa_exempt=bool(row["mfa_exempt"]),
         email_verified=row["email_verified_at"] is not None,
         ver=int(row["ver"]),
         failed_login_attempts=int(row["failed_login_attempts"]),
@@ -220,7 +225,7 @@ async def list_users(
         text(f"""
             SELECT u.id, u.email, u.email_normalized, u.first_name, u.last_name, u.display_name,
                    u.role, u.status, u.must_change_password,
-                   u.mfa_enrolled_at IS NOT NULL AS mfa_enrolled,
+                   u.mfa_enrolled_at IS NOT NULL AS mfa_enrolled, u.mfa_exempt,
                    u.email_verified_at, u.ver, u.failed_login_attempts, u.locked_until,
                    u.last_login_at, u.last_login_ip, u.suspended_at, u.suspended_reason,
                    u.deleted_at, u.created_at, u.updated_at,
@@ -276,14 +281,19 @@ async def update_user(
         params["dn"] = body.display_name.strip()
         changed["display_name"] = params["dn"]
 
+    # Load once — both the role and email branches need the current row to
+    # decide whether anything actually changed.
+    current = (
+        await _load_user(conn, user_id)
+        if (body.role is not None or body.email is not None)
+        else None
+    )
+
     role_changed = False
-    if body.role is not None:
-        current = await _load_user(conn, user_id)
+    if body.role is not None and current is not None:
         if str(current["role"]) != body.role:
             updates.append("role = CAST(:role AS user_role)")
             params["role"] = body.role
-            # Bump ver so live tokens with the old role can no longer act.
-            updates.append("ver = ver + 1")
             changed["role"] = body.role
             role_changed = True
 
@@ -299,25 +309,40 @@ async def update_user(
         params["pid"] = pid
         changed["profile_id"] = pid
 
-    if body.email is not None:
+    if body.mfa_exempt is not None:
+        updates.append("mfa_exempt = :mex")
+        params["mex"] = body.mfa_exempt
+        changed["mfa_exempt"] = body.mfa_exempt
+
+    email_changed = False
+    if body.email is not None and current is not None:
         new_email = body.email.strip()
         new_norm = new_email.lower()
-        # Reject dup on a different active user.
-        dup = await conn.execute(
-            text("""SELECT id FROM users
-                    WHERE email_normalized = :ne AND id <> :id AND deleted_at IS NULL"""),
-            {"ne": new_norm, "id": user_id},
-        )
-        if dup.first() is not None:
-            raise HTTPException(status_code=409, detail="email already in use")
-        updates.append("email = :em")
-        updates.append("email_normalized = :ne")
-        # New email must be re-verified.
-        updates.append("email_verified_at = NULL")
+        # The client sends every field on save, so only act when the address
+        # actually differs — otherwise a role-only edit would needlessly wipe
+        # email_verified_at and revoke the user's sessions.
+        if new_norm != str(current["email_normalized"]):
+            # Reject dup on a different active user.
+            dup = await conn.execute(
+                text("""SELECT id FROM users
+                        WHERE email_normalized = :ne AND id <> :id AND deleted_at IS NULL"""),
+                {"ne": new_norm, "id": user_id},
+            )
+            if dup.first() is not None:
+                raise HTTPException(status_code=409, detail="email already in use")
+            updates.append("email = :em")
+            updates.append("email_normalized = :ne")
+            # New email must be re-verified.
+            updates.append("email_verified_at = NULL")
+            params["em"] = new_email
+            params["ne"] = new_norm
+            changed["email"] = new_email
+            email_changed = True
+
+    # Single ver bump, however many identity-affecting fields moved — two
+    # `ver = ver + 1` clauses in one UPDATE is a Postgres syntax error.
+    if role_changed or email_changed:
         updates.append("ver = ver + 1")
-        params["em"] = new_email
-        params["ne"] = new_norm
-        changed["email"] = new_email
 
     if not updates:
         return _row_to_model(await _load_user(conn, user_id))
@@ -329,7 +354,7 @@ async def update_user(
     )
     # If we bumped ver (role or email change), also revoke live sessions —
     # ver alone kills bearer tokens, but the refresh cookie should stop working too.
-    if role_changed or "email" in changed:
+    if role_changed or email_changed:
         await conn.execute(
             text("""UPDATE sessions SET revoked_at = now(), revoked_reason = 'admin_update'
                     WHERE user_id = :id AND revoked_at IS NULL"""),
@@ -340,6 +365,27 @@ async def update_user(
         None, ctx,
         AuditEvent(action="USER_UPDATED", target_type="user", target_id=user_id,
                    context={"changed": changed}),
+        actor_ip=_client_ip(request), user_agent=_client_ua(request),
+    )
+    return _row_to_model(await _load_user(conn, user_id))
+
+
+@router.post("/{user_id}/mfa/reset", response_model=UserRow)
+async def reset_user_mfa(
+    user_id: str,
+    request: Request,
+    conn: Annotated[AsyncConnection, DbConn],
+    ctx: Annotated[AuthContext, require("user:force_reset")],
+    mfa: Annotated[MfaService, Depends(dep_mfa_service)],
+):
+    """Clear a user's 2FA (lost-device support). They re-enrol on next login
+    if 2FA is still required for them."""
+    await _load_user(conn, user_id)  # 404 if missing
+    await mfa.reset_user(conn, user_id)
+    await audit_logger().emit(
+        None, ctx,   # own committed tx — never the request conn (advisory-lock deadlock)
+        AuditEvent(action="USER_MFA_RESET", severity="SEC",
+                   target_type="user", target_id=user_id),
         actor_ip=_client_ip(request), user_agent=_client_ua(request),
     )
     return _row_to_model(await _load_user(conn, user_id))

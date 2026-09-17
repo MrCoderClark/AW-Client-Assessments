@@ -203,6 +203,69 @@ host    clientfiles_v2    <user>    192.168.70.180/32    scram-sha-256
 
 Then reload Postgres. (Dev box already has its own entry — leave it alone.)
 
+### 4d · Entra SSO (optional — see `docs/ENTRA_SSO.md`)
+
+To enable "Sign in with Microsoft", add these to `.env`. Leave `AUTH_SSO_ENABLED=false`
+(or omit the block) and the app runs password-only — SSO stays off unless the toggle is
+on **and** tenant/client/secret are all present.
+
+```dotenv
+# ---- Entra SSO ---------------------------------------------------
+AUTH_SSO_ENABLED=true
+AUTH_ENTRA_TENANT_ID=<Directory (tenant) ID>
+AUTH_ENTRA_CLIENT_ID=<Application (client) ID>
+AUTH_ENTRA_CLIENT_SECRET="<client secret Value>"   # quote it — see §4b.1 BOM/backslash trap
+AUTH_ENTRA_REDIRECT_URI=https://192.168.70.180/api/v1/auth/sso/callback
+# optional (defaults shown):
+AUTH_ENTRA_POST_LOGOUT_REDIRECT_URI=https://192.168.70.180/login   # default: {APP_BASE_URL}/login
+AUTH_ENTRA_SCOPES=openid profile email
+AUTH_SSO_STATE_TTL=300
+```
+
+App-registration prerequisites (one-time, in the Entra admin center):
+- **Single-tenant** registration named `Client Files Viewer`.
+- **Redirect URI** (type *Web* — NOT "Single-page application", or the token exchange fails
+  with `AADSTS700025`) matching `AUTH_ENTRA_REDIRECT_URI` **exactly**.
+- **Front-channel / post-logout redirect URI** matching `AUTH_ENTRA_POST_LOGOUT_REDIRECT_URI`
+  (so RP-initiated logout returns the browser to the app instead of Microsoft's own page).
+- **API permissions**: Microsoft Graph delegated `openid`, `profile`, `email` — click
+  **Grant admin consent** (tenants that restrict user consent will otherwise block sign-in).
+- New SSO users land as **viewer**; promote them in the **Users** admin page.
+- **Optional allowlist:** **Security** page (`/admin/security`) → "Restrict Microsoft sign-in to an allowlist". When on, only the listed emails may sign in via Entra (others get a "contact IT Support" message). The manager supports search, pagination, and **bulk paste** (one email per line) for large lists. Add your staff emails **before** enabling, or an empty enabled list blocks all SSO. Local `/admin/login` is unaffected.
+
+> **⚠️ HTTPS required in prod.** Entra allows a plain-HTTP redirect URI **only** for
+> `http://localhost`. A non-localhost URI (`http://192.168.70.180/...`) **cannot be registered** —
+> so SSO in prod needs TLS in front (reverse proxy + cert), `https://…` redirect + post-logout
+> URIs, and `AUTH_COOKIE_SECURE=true`. Dev uses `http://localhost:3000/api/v1/auth/sso/callback`
+> and `http://localhost:3000/login`. Password login over plain HTTP is unaffected.
+
+**Secret rotation** = a `.env` edit + `Restart-Service cfv-api -Force`. Password login always
+stays available as break-glass (`admin@aw.local` at **`/admin/login`**), so an expired secret
+never locks everyone out.
+
+### 4e · Email — Resend or SMTP
+
+`send_mail` prefers **Resend** (HTTP API) when `RESEND_API_KEY` is set, else falls back to the
+SMTP block in §4b. Used for invites, password resets, and **2FA email one-time codes**.
+
+```dotenv
+RESEND_API_KEY=<resend key>
+EMAIL_FROM=<verified sender, e.g. no-reply@yourdomain>
+```
+
+No `npm/pip` package is needed for Resend — it's a plain HTTPS call from the backend.
+
+### 4f · Two-factor auth (2FA)
+
+No new env vars — the TOTP secret is encrypted with the existing `AUTH_REFRESH_HASH_SECRET`.
+2FA is **off** until an admin turns on **Security page (`/admin/security`) → Require two-factor**
+(the `mfa_required` runtime setting). When on, every non-exempt user enrols an authenticator app
+on next login. Per-user exemption + **Reset 2FA** live in the Users admin drawer.
+
+> Turning `mfa_required` on requires **every** non-exempt account — including `admin@aw.local` —
+> to enrol on next login. Keep one admin exempt (or ready to enrol) during rollout so you can't
+> lock yourself out.
+
 ---
 
 ## 5 · Migrations
@@ -261,7 +324,7 @@ nssm set cfv-web DependOnService cfv-api
 nssm set cfv-web Description "Client Files Viewer — Next.js frontend"
 ```
 
-Both run as **LocalSystem** by default — has the permission to bind port 80 and to open outbound SMB / SMTP / Postgres.
+Both run as **LocalSystem** by default — has the permission to bind port 80 and to open outbound SMB / SMTP / Postgres, plus HTTPS to `login.microsoftonline.com` (Entra SSO) and `api.resend.com` (email) when those are configured.
 
 ### 6c · Start them
 
@@ -285,15 +348,17 @@ Restart-Service cfv-api -Force
 
 From another workstation on the LAN:
 
-1. Browse `http://192.168.70.180` → login page renders.
-2. Log in as bootstrap admin (`admin@aw.local`).
+1. Browse `http://192.168.70.180` → login page renders (Entra "Sign in with Microsoft").
+2. Log in as bootstrap admin via **`/admin/login`** (`admin@aw.local`) — the local form. (SSO users use the Microsoft button on `/login`.)
 3. Sidebar loads, dashboard shows tiles.
-4. Click **Customize** → widget drawer opens (validates the /me endpoint + custom-dashboard round-trip).
+4. As **admin**, the floating **Customize** button appears → widget drawer opens (validates /me + custom-dashboard round-trip; non-admins don't see it — it's `system:write`-gated).
 5. Trigger **Run scan** from Quick Actions → log drawer streams progress (validates SSE + SMB creds).
 6. Open the **Notifications** bell → any recent events show up.
 7. `http://192.168.70.180/api/health` returns `{"status":"ok"}` (validates the reverse-through-Next path).
+8. (If SSO configured over HTTPS) click **Sign in with Microsoft** → consent → land as **viewer**; **Sign out** returns via Entra `end_session`.
+9. (If 2FA on) a fresh non-exempt login is sent to `/mfa` → scan the QR → verify → in.
 
-If all seven pass, deployment is live.
+If these pass, deployment is live.
 
 ---
 
@@ -338,7 +403,11 @@ then check out the code that matches that revision and re-run `update.ps1`.
 | Login page 500s | `logs\api.err.log` — usually missing/malformed env var. If the log starts with `Failed to parse environment file '.env' at position 0`, the file has a UTF-8 BOM — see §4b.1 |
 | Login page never loads (blank) | `logs\web.err.log` — Node port bind or missing `.next/` build |
 | Scan works but PDFs fail to open | SMB creds — `SMB_USER`/`SMB_PASS` in `.env`, or a firewall on the source PC |
-| Emails not landing | `logs\api.out.log` — search for `email failed:` — SMTP env vars or the SMTP host blocking |
+| Emails / 2FA email codes not landing | `logs\api.out.log` — search for `email failed:` — `RESEND_API_KEY`/`EMAIL_FROM` (or the SMTP fallback block); a sender not verified in Resend also fails |
+| Microsoft sign-in fails (`AADSTS…`) | server log line `cfv.sso SSO callback failed` has the exact code. `AADSTS700025` = redirect URI registered as SPA not **Web**; `AADSTS900971`/`50011` = redirect URI mismatch or non-HTTPS non-localhost; `AADSTS650057`/consent = grant admin consent |
+| Every login hangs / `/settings` times out (`QueuePool ... timed out`) | audit advisory-lock deadlock or leaked connections. Check `pg_stat_activity` for `idle in transaction` holding an `advisory` lock; `pg_terminate_backend(pid)` the holder, then hard-restart `cfv-api`. Root cause is always an audit `emit(conn)` — must be `emit(None)` (see PHASE15 gotcha) |
+| "Sign in with Microsoft" button missing | `sso_login_enabled` runtime toggle is off (Security page → Local accounts only), or Entra env vars incomplete → `/api/v1/auth/sso/config` returns `{enabled:false}` |
+| SSO says "contact IT Support" (`sso_error=not_allowed`) | the **SSO allowlist** is enabled and the user's email isn't on it — add it on the Security page (/admin/security), or turn the allowlist off. An empty enabled list blocks everyone. |
 | PC-unreachable alert never fires | check `PC_HEALTH_STALE_DAYS`, verify `pc_status.last_reachable = false` for the PC in the DB |
 | Dashboard shows stale data | browser cache — hard reload; if not that, restart `cfv-api` |
 | Both services healthy but 502 on `/api/*` | `next.config.ts` rewrite target — should still be `http://localhost:8000` |

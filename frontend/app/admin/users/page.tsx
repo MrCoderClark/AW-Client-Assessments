@@ -9,7 +9,7 @@ import { useConfirm } from "../../_components/confirm-dialog";
 import { RequirePerm } from "../../_components/require-perm";
 import {
   UserRow, listUsers, updateUser, suspendUser, reactivateUser,
-  forceResetUser, deleteUser, inviteUser, getUser,
+  forceResetUser, deleteUser, inviteUser, getUser, resetUserMfa,
 } from "../../_lib/admin-users";
 import { ProfileRow, listProfiles } from "../../_lib/admin-profiles";
 
@@ -323,6 +323,18 @@ function UserDrawer({ userId, canWrite, onClose, onChanged }: {
     if (ok === null) return;
     wrap("force-reset", () => forceResetUser(u!.id));
   };
+  const doResetMfa = async () => {
+    const ok = await confirm({
+      title: "Reset this user's 2FA?",
+      message: "Their authenticator and backup codes are cleared. They'll set up 2FA again on next sign-in if it's still required.",
+      confirmLabel: "Reset 2FA",
+      danger: true,
+    });
+    if (ok === null) return;
+    wrap("mfa-reset", () => resetUserMfa(u!.id));
+  };
+  const doToggleExempt = () =>
+    wrap("mfa-exempt", () => updateUser(u!.id, { mfa_exempt: !u!.mfa_exempt }));
   const doDelete = async (hard: boolean) => {
     const ok = await confirm({
       title: hard ? "Permanently delete user?" : "Soft-delete user?",
@@ -467,6 +479,11 @@ function UserDrawer({ userId, canWrite, onClose, onChanged }: {
                   {u.locked_until ? fmtRelative(u.locked_until) : <span className="mute">—</span>}
                 </Field>
                 <Field label="Email verified">{u.email_verified ? "Yes" : <span className="mute">No</span>}</Field>
+                <Field label="Two-factor">
+                  {u.mfa_exempt
+                    ? <span className="mute">Exempt</span>
+                    : u.mfa_enrolled ? "Enrolled" : <span className="mute">Not set up</span>}
+                </Field>
                 <Field label="Created">{fmtRelative(u.created_at)}</Field>
                 {u.suspended_at && <Field label="Suspended">{fmtRelative(u.suspended_at)} — {u.suspended_reason || "no reason given"}</Field>}
                 {u.deleted_at && <Field label="Deleted">{fmtRelative(u.deleted_at)}</Field>}
@@ -489,6 +506,18 @@ function UserDrawer({ userId, canWrite, onClose, onChanged }: {
                     {u.deleted_at === null && (
                       <button className="btn" disabled={busy !== null} onClick={doForceReset}>
                         {busy === "force-reset" ? "Sending link…" : "Force password reset"}
+                      </button>
+                    )}
+                    {u.deleted_at === null && u.mfa_enrolled && (
+                      <button className="btn" disabled={busy !== null} onClick={doResetMfa}>
+                        {busy === "mfa-reset" ? "Resetting…" : "Reset 2FA"}
+                      </button>
+                    )}
+                    {u.deleted_at === null && (
+                      <button className="btn" disabled={busy !== null} onClick={doToggleExempt}>
+                        {busy === "mfa-exempt"
+                          ? "Saving…"
+                          : u.mfa_exempt ? "Remove 2FA exemption" : "Exempt from 2FA"}
                       </button>
                     )}
                     {u.deleted_at === null ? (

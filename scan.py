@@ -62,32 +62,51 @@ def _is_sharing_violation(err: Exception) -> bool:
     return "0xc0000043" in s or "used by another process" in s
 
 
+def _dbg(msg: str) -> None:
+    print(f"[scan] {msg}", flush=True)
+
+
 def _read_pdf_bytes(host: str, path: str, user: str, password: str) -> tuple[bytes, str | None]:
     """Read a PDF over SMB. If locked, try to unlock and retry once.
     Returns (bytes, unlock_note) — unlock_note is a printable string if we killed something.
     """
+    _dbg(f"open {path}")
     try:
         with smbclient.open_file(path, mode="rb") as f:
-            return f.read(), None
+            data = f.read()
+        _dbg(f"read ok {len(data)} bytes")
+        return data, None
     except Exception as e:
         if not _is_sharing_violation(e):
             raise
+        _dbg(f"sharing-violation on {path}: killing readers")
         killed = kill_pdf_readers(host, user, password)
         note = f"killed {killed or 'nothing'}"
         time.sleep(UNLOCK_WAIT)
         with smbclient.open_file(path, mode="rb") as f:
-            return f.read(), note
+            data = f.read()
+        _dbg(f"read-after-unlock ok {len(data)} bytes")
+        return data, note
 
 
 def _walk_pdfs(root: str):
     try:
-        for entry in smbclient.scandir(root):
-            if entry.is_dir():
-                yield from _walk_pdfs(f"{root}\\{entry.name}")
-            elif entry.name.lower().endswith(".pdf"):
-                yield f"{root}\\{entry.name}", entry
-    except OSError:
+        _dbg(f"scandir {root}")
+        entries = list(smbclient.scandir(root))
+        _dbg(f"scandir {root} → {len(entries)} entries")
+    except OSError as e:
+        _dbg(f"scandir {root} failed: {e.__class__.__name__}: {e}")
         return
+    for entry in entries:
+        if entry.is_dir():
+            yield from _walk_pdfs(f"{root}\\{entry.name}")
+        elif entry.name.lower().endswith(".pdf"):
+            # Office / PDF-reader lock stubs (~$name.pdf) are tiny and often
+            # hold an exclusive lock — reading them hangs indefinitely.
+            if entry.name.startswith("~$"):
+                _dbg(f"skip lock-stub {entry.name}")
+                continue
+            yield f"{root}\\{entry.name}", entry
 
 
 def _scan_pc(pc_name: str, host: str, conn, week_start, week_end, user: str, password: str) -> Iterator[str]:  # noqa: PLR0913
