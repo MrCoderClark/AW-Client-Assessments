@@ -57,25 +57,66 @@ def existing_fingerprint(conn, host: str, source_path: str) -> tuple[int, str] |
     return (row["size"], mtime.isoformat(timespec="seconds") if hasattr(mtime, "isoformat") else mtime)
 
 
-def content_duplicate_exists(conn, host: str, source_path: str, md5: str, text_hash: str | None) -> bool:
-    """True if another *non-archived* row already holds this content.
+def pc_location_id(conn, pc_name: str) -> int:
+    """The office (location_id) a lab PC belongs to; Bronx (1) if not yet set."""
+    row = conn.execute(
+        "SELECT location_id FROM pc_status WHERE pc_name = %s", (pc_name,)
+    ).fetchone()
+    return row["location_id"] if row else 1
+
+
+def office_to_location_id(conn, office: str | None) -> int | None:
+    """Map an O365 'Office' string to a location via the alias table (normalized)."""
+    if not office or not office.strip():
+        return None
+    row = conn.execute(
+        "SELECT location_id FROM location_office_aliases WHERE office_value = %s",
+        (office.strip().lower(),),
+    ).fetchone()
+    return row["location_id"] if row else None
+
+
+def set_user_location_from_office(conn, user_id: str, office: str | None) -> int | None:
+    """On SSO login, assign a user's office from their O365 Office field — but only
+    if they have no location yet, so an admin override is never clobbered. Returns
+    the location_id assigned, or None (unmapped, or already assigned)."""
+    loc = office_to_location_id(conn, office)
+    if loc is None:
+        return None
+    if conn.execute("SELECT 1 FROM user_locations WHERE user_id = %s LIMIT 1",
+                    (user_id,)).fetchone():
+        return None  # keep whatever's already there (admin-set or a prior login)
+    conn.execute(
+        "INSERT INTO user_locations (user_id, location_id, primary_loc) VALUES (%s, %s, true) "
+        "ON CONFLICT DO NOTHING",
+        (user_id, loc),
+    )
+    conn.commit()
+    return loc
+
+
+def content_duplicate_exists(conn, host: str, source_path: str, md5: str,
+                             text_hash: str | None, location_id: int) -> bool:
+    """True if another *non-archived* row **in the same office** holds this content.
 
     Matches byte-identical (md5) OR content-identical (normalized text_hash —
     the vendor stamps a fresh /CreationDate per download, so md5 alone misses
-    true dupes). The file's own row (same host+source_path) is excluded so a
-    plain re-scan isn't seen as its own duplicate. Archived rows are excluded
-    so a re-scanned copy of an archived file can still re-commit to today's
-    folder — mirrors the dedupe scope in commit.py.
+    true dupes). Scoped to `location_id` so the same client re-tested at another
+    office keeps a copy there. The file's own row (same host+source_path) is
+    excluded so a plain re-scan isn't seen as its own duplicate. Archived rows are
+    excluded so a re-scanned copy of an archived file can still re-commit —
+    mirrors the dedupe scope in commit.py.
     """
     row = conn.execute(
         """
         SELECT 1 FROM pdfs
         WHERE archived_at IS NULL
+          AND location_id = %s
           AND (md5 = %s OR (text_hash IS NOT NULL AND text_hash = %s))
           AND NOT (host = %s AND source_path = %s)
         LIMIT 1
         """,
-        (md5, text_hash, host, source_path),
+        (location_id, md5, text_hash, host, source_path),
     ).fetchone()
     return row is not None
 

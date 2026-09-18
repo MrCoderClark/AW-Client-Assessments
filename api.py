@@ -39,6 +39,7 @@ from auth.notifications import NotificationEvent, emit_sync, register_main_loop
 from auth.observability import RequestIdMiddleware, configure_logging
 from auth.permissions import current_user_dep, require
 from auth.audit import emit_sync as audit_emit
+from auth.scope import allowed_location_ids, filter_ids_in_scope, location_ok, scope_sql
 from auth.profile_routes import router as profiles_router
 from auth.mfa_routes import router as mfa_router
 from auth.routes import router as auth_router
@@ -140,21 +141,27 @@ def list_pdfs(archived: str = "false", ctx: AuthContext = current_user_dep()):
     else:
         where = "WHERE archived_at IS NULL"
     conn = connect()
+    # Location scoping: limit to the caller's office(s) unless they hold location:all.
+    loc_clause, loc_params = scope_sql(allowed_location_ids(ctx, conn))
+    where_sql = f"{where} AND {loc_clause}" if where else f"WHERE {loc_clause}"
     rows = conn.execute(f"""
         SELECT id, host, source_path, filename, proposed_name, assessment_type,
                first_name, last_name, size, mtime, md5,
-               indexed_at, committed_at, dest_path,
+               indexed_at, committed_at, dest_path, location_id,
                archived_at, archive_path, archive_status
         FROM pdfs
-        {where}
+        {where_sql}
         ORDER BY indexed_at DESC
-    """).fetchall()
+    """, loc_params).fetchall()
     return [dict(r) for r in rows]
 
 
 @app.get("/api/pcs")
-def list_pcs(_=require("pc:read")):
+def list_pcs(ctx: AuthContext = current_user_dep()):
+    if "pc:read" not in ctx.permissions:
+        raise HTTPException(403, "missing permission: pc:read")
     conn = connect()
+    allowed = allowed_location_ids(ctx, conn)  # None = all offices
     status = {r["pc_name"]: dict(r) for r in conn.execute("SELECT * FROM pc_status")}
     # Archived rows excluded from surface counts — docs/ARCHIVING_PLAN.md D4.
     file_counts = {r["host"]: r["n"] for r in conn.execute(
@@ -163,11 +170,15 @@ def list_pcs(_=require("pc:read")):
     result = []
     for pc_name, host in PCS.items():
         s = status.get(pc_name)
+        pc_loc = (s.get("location_id") if s else None) or 1  # default Bronx
+        if allowed is not None and pc_loc not in allowed:
+            continue  # PC in another office — hidden from this caller
         # JSONB → psycopg gives us the decoded value directly.
         counts = s["last_counts_json"] if s and s.get("last_counts_json") else None
         result.append({
             "pc_name":       pc_name,
             "host":          host,
+            "location_id":   pc_loc,
             "last_attempt":  s.get("last_attempt") if s else None,
             "last_seen":     s.get("last_seen") if s else None,
             "reachable":     bool(s.get("last_reachable")) if s and s.get("last_reachable") is not None else None,
@@ -179,9 +190,11 @@ def list_pcs(_=require("pc:read")):
 
 
 @app.get("/api/logs")
-def list_logs(_=require("log:read")):
+def list_logs(ctx: AuthContext = current_user_dep()):
     """Per-PC folder breakdown (Desktop / Documents / Downloads) + status + pending count.
-    Numbers reflect what's currently in the index (all-time)."""
+    Numbers reflect what's currently in the index (all-time). Location-scoped."""
+    if "log:read" not in ctx.permissions:
+        raise HTTPException(403, "missing permission: log:read")
     conn = connect()
 
     # Folder breakdown per host, split by committed status.
@@ -214,11 +227,15 @@ def list_logs(_=require("log:read")):
         d["committed"] += r["committed"] or 0
 
     status = {r["pc_name"]: dict(r) for r in conn.execute("SELECT * FROM pc_status")}
+    allowed = allowed_location_ids(ctx, conn)  # None = all offices
 
     result = []
     for pc_name, host in PCS.items():
-        c = per_host.get(host, {"desktop": 0, "documents": 0, "downloads": 0, "other": 0, "total": 0, "committed": 0})
         s = status.get(pc_name)
+        pc_loc = (s.get("location_id") if s else None) or 1
+        if allowed is not None and pc_loc not in allowed:
+            continue  # PC in another office
+        c = per_host.get(host, {"desktop": 0, "documents": 0, "downloads": 0, "other": 0, "total": 0, "committed": 0})
         result.append({
             "pc_name":      pc_name,
             "host":         host,
@@ -311,16 +328,20 @@ def _title(s: str | None) -> str | None:
 
 
 @app.patch("/api/pdfs/{pdf_id}")
-def update_pdf(pdf_id: int, patch: PdfPatch, _=require("pdf:write")):
+def update_pdf(pdf_id: int, patch: PdfPatch, ctx: AuthContext = current_user_dep()):
     """Rename a committed PDF (on the share + in the DB) or update a pending row (DB only).
 
     Recomputes proposed_name from assessment_type + first_name + last_name.
     409 if the target filename would collide with an existing file on the share.
     """
+    if "pdf:write" not in ctx.permissions:
+        raise HTTPException(403, "missing permission: pdf:write")
     conn = connect()
     row = conn.execute("SELECT * FROM pdfs WHERE id = %s", (pdf_id,)).fetchone()
     if not row:
         raise HTTPException(404, "not found")
+    if not location_ok(ctx, conn, row["location_id"]):
+        raise HTTPException(404, "not found")  # another office
     if row["archived_at"] is not None:
         raise HTTPException(409, "cannot rename an archived file — restore it first")
     if not row["assessment_type"]:
@@ -371,12 +392,14 @@ def pdf_content(pdf_id: int, download: bool = False, ctx: AuthContext = current_
         raise HTTPException(403, "missing permission: pdf:read")
     conn = connect()
     row = conn.execute(
-        "SELECT filename, proposed_name, source_path, dest_path, archive_path, archived_at "
+        "SELECT filename, proposed_name, source_path, dest_path, archive_path, archived_at, location_id "
         "FROM pdfs WHERE id = %s",
         (pdf_id,),
     ).fetchone()
     if not row:
         raise HTTPException(404, "not found")
+    if not location_ok(ctx, conn, row["location_id"]):
+        raise HTTPException(404, "not found")  # another office — don't leak existence
     if row["archived_at"] is not None and "pdf:archive" not in ctx.permissions:
         # Same 404 shape a viewer gets for a missing row — don't leak existence.
         raise HTTPException(404, "not found")
@@ -515,10 +538,12 @@ def sf_push(pdf_id: int, req: CaseNumberReq, ctx: AuthContext = current_user_dep
     conn = connect()
     row = conn.execute(
         "SELECT id, first_name, last_name, proposed_name, filename, dest_path, "
-        "committed_at, archived_at FROM pdfs WHERE id = %s", (pdf_id,)
+        "committed_at, archived_at, location_id FROM pdfs WHERE id = %s", (pdf_id,)
     ).fetchone()
     if not row:
         raise HTTPException(404, "not found")
+    if not location_ok(ctx, conn, row["location_id"]):
+        raise HTTPException(404, "not found")  # another office — don't leak existence
     path = row["dest_path"]
     if not row["committed_at"] or not path:
         raise HTTPException(409, "Only committed files can be pushed to Salesforce.")
@@ -572,6 +597,147 @@ def sf_push(pdf_id: int, req: CaseNumberReq, ctx: AuthContext = current_user_dep
                         "content_version_id": cv_id, "title": title})
     return {"status": "uploaded", "content_version_id": cv_id,
             "account_name": acct["name"], "account_id": acct["account_id"]}
+
+
+# ---------- Locations (multi-office) — docs/MULTI_LOCATION.md --------------
+
+class LocationCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=32, pattern=r"^[a-z0-9_]+$")
+    name: str = Field(min_length=1, max_length=80)
+
+
+class LocationPatch(BaseModel):
+    name: str | None = Field(default=None, max_length=80)
+    active: bool | None = None
+
+
+class AliasAdd(BaseModel):
+    office_value: str = Field(min_length=1, max_length=200)
+    location_id: int
+
+
+class PcLocationPatch(BaseModel):
+    location_id: int
+
+
+class UserLocationsPut(BaseModel):
+    location_ids: list[int]
+
+
+@app.get("/api/locations")
+def list_locations(_: AuthContext = current_user_dep()):
+    """All offices (id, code, name, active). Any authenticated user — for the picker."""
+    conn = connect()
+    return [dict(r) for r in conn.execute(
+        "SELECT id, code, name, active FROM locations ORDER BY id")]
+
+
+@app.post("/api/locations")
+def create_location(req: LocationCreate, _=require("system:write")):
+    conn = connect()
+    try:
+        row = conn.execute(
+            "INSERT INTO locations (code, name) VALUES (%s, %s) "
+            "RETURNING id, code, name, active", (req.code, req.name)).fetchone()
+        conn.commit()
+    except Exception:
+        raise HTTPException(409, "could not create location (duplicate code?)")
+    return dict(row)
+
+
+@app.patch("/api/locations/{loc_id}")
+def patch_location(loc_id: int, req: LocationPatch, _=require("system:write")):
+    sets, params = [], []
+    if req.name is not None:
+        sets.append("name = %s"); params.append(req.name)
+    if req.active is not None:
+        sets.append("active = %s"); params.append(req.active)
+    if not sets:
+        raise HTTPException(400, "nothing to update")
+    params.append(loc_id)
+    conn = connect()
+    row = conn.execute(
+        f"UPDATE locations SET {', '.join(sets)} WHERE id = %s "
+        "RETURNING id, code, name, active", tuple(params)).fetchone()
+    conn.commit()
+    if not row:
+        raise HTTPException(404, "not found")
+    return dict(row)
+
+
+@app.get("/api/locations/aliases")
+def list_aliases(_=require("system:write")):
+    conn = connect()
+    return [dict(r) for r in conn.execute(
+        "SELECT office_value, location_id FROM location_office_aliases ORDER BY office_value")]
+
+
+@app.post("/api/locations/aliases")
+def add_alias(req: AliasAdd, _=require("system:write")):
+    val = req.office_value.strip().lower()
+    conn = connect()
+    conn.execute(
+        "INSERT INTO location_office_aliases (office_value, location_id) VALUES (%s, %s) "
+        "ON CONFLICT (office_value) DO UPDATE SET location_id = EXCLUDED.location_id",
+        (val, req.location_id))
+    conn.commit()
+    return {"office_value": val, "location_id": req.location_id}
+
+
+@app.delete("/api/locations/aliases/{office_value}")
+def delete_alias(office_value: str, _=require("system:write")):
+    conn = connect()
+    conn.execute("DELETE FROM location_office_aliases WHERE office_value = %s",
+                 (office_value.strip().lower(),))
+    conn.commit()
+    return {"deleted": office_value.strip().lower()}
+
+
+@app.get("/api/locations/pcs")
+def list_location_pcs(_=require("system:write")):
+    """Every lab PC with its assigned office (defaults to Bronx=1 if unscanned)."""
+    conn = connect()
+    status = {r["pc_name"]: r["location_id"] for r in
+              conn.execute("SELECT pc_name, location_id FROM pc_status")}
+    return [{"pc_name": name, "host": host, "location_id": status.get(name, 1)}
+            for name, host in PCS.items()]
+
+
+@app.patch("/api/locations/pcs/{pc_name}")
+def set_pc_location(pc_name: str, req: PcLocationPatch, _=require("system:write")):
+    if pc_name not in PCS:
+        raise HTTPException(404, "unknown PC")
+    conn = connect()
+    conn.execute(
+        "INSERT INTO pc_status (pc_name, host, location_id) VALUES (%s, %s, %s) "
+        "ON CONFLICT (pc_name) DO UPDATE SET location_id = EXCLUDED.location_id",
+        (pc_name, PCS[pc_name], req.location_id))
+    conn.commit()
+    return {"pc_name": pc_name, "location_id": req.location_id}
+
+
+@app.get("/api/locations/user/{user_id}")
+def get_user_locations(user_id: str, _=require("user:read")):
+    conn = connect()
+    ids = [r["location_id"] for r in conn.execute(
+        "SELECT location_id FROM user_locations WHERE user_id = %s ORDER BY primary_loc DESC, location_id",
+        (user_id,))]
+    return {"location_ids": ids}
+
+
+@app.put("/api/locations/user/{user_id}")
+def set_user_locations(user_id: str, req: UserLocationsPut, _=require("user:write")):
+    ids = list(dict.fromkeys(req.location_ids))  # de-dupe, keep order (first = primary)
+    conn = connect()
+    if not conn.execute("SELECT 1 FROM users WHERE id = %s", (user_id,)).fetchone():
+        raise HTTPException(404, "user not found")
+    conn.execute("DELETE FROM user_locations WHERE user_id = %s", (user_id,))
+    for i, loc in enumerate(ids):
+        conn.execute(
+            "INSERT INTO user_locations (user_id, location_id, primary_loc) VALUES (%s, %s, %s)",
+            (user_id, loc, i == 0))
+    conn.commit()
+    return {"location_ids": ids}
 
 
 def _emit_run_completion(kind: str, lines: list[str]) -> None:
@@ -824,14 +990,18 @@ def bulk_action(req: BulkRequest, ctx: AuthContext = current_user_dep()):
     # permission set. Operators can commit; only admins can delete rows.
     if not req.ids:
         raise HTTPException(400, "no ids provided")
+    # Location scope: silently drop ids for offices this caller can't act on.
+    ids = filter_ids_in_scope(ctx, connect(), req.ids)
+    if not ids:
+        raise HTTPException(404, "no matching files in your office")
     if req.action == "commit":
         if "run:trigger" not in ctx.permissions:
             raise HTTPException(403, "missing permission: run:trigger")
-        return StreamingResponse(_sse(commit_all(only_ids=req.ids)), media_type="text/event-stream")
+        return StreamingResponse(_sse(commit_all(only_ids=ids)), media_type="text/event-stream")
     if req.action == "delete":
         if "pdf:delete" not in ctx.permissions:
             raise HTTPException(403, "missing permission: pdf:delete")
-        return StreamingResponse(_sse(delete_rows(req.ids, delete_files=req.delete_files)), media_type="text/event-stream")
+        return StreamingResponse(_sse(delete_rows(ids, delete_files=req.delete_files)), media_type="text/event-stream")
     raise HTTPException(400, f"unknown action: {req.action}")
 
 
@@ -866,14 +1036,20 @@ class ArchiveSearchRequest(BaseModel):
 def bulk_archive(req: IdListRequest, ctx: AuthContext = require("pdf:archive")):
     if not req.ids:
         raise HTTPException(400, "no ids provided")
-    return archive_svc.archive_ids(req.ids, actor_id=str(ctx.user_id) if ctx.user_id else None)
+    ids = filter_ids_in_scope(ctx, connect(), req.ids)
+    if not ids:
+        raise HTTPException(404, "no matching files in your office")
+    return archive_svc.archive_ids(ids, actor_id=str(ctx.user_id) if ctx.user_id else None)
 
 
 @app.post("/api/pdfs/bulk/restore")
 def bulk_restore(req: IdListRequest, ctx: AuthContext = require("pdf:archive")):
     if not req.ids:
         raise HTTPException(400, "no ids provided")
-    return archive_svc.restore_ids(req.ids, actor_id=str(ctx.user_id) if ctx.user_id else None)
+    ids = filter_ids_in_scope(ctx, connect(), req.ids)
+    if not ids:
+        raise HTTPException(404, "no matching files in your office")
+    return archive_svc.restore_ids(ids, actor_id=str(ctx.user_id) if ctx.user_id else None)
 
 
 def _preview_sample(direction: str, before: datetime, after: datetime | None,

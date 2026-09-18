@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
+import anyio
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -49,6 +51,12 @@ SSO_STATE_COOKIE = "cfv_sso"
 def _cookie_secure() -> bool:
     import os
     return os.environ.get("AUTH_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _apply_office_location(user_id: str, office: str) -> None:
+    """Sync-db office→location assignment, run in a worker thread from the callback."""
+    from db import connect, set_user_location_from_office
+    set_user_location_from_office(connect(), user_id, office)
 
 
 def _set_state_cookie(resp: RedirectResponse, value: str, ttl: int) -> None:
@@ -187,6 +195,13 @@ async def sso_callback(
             return _login_redirect("not_allowed")
         uid, role, ver = await svc.resolve_sso_user(
             conn, claims=claims, ip_address=ip, user_agent=ua, request_id=rid)
+        # Assign the user's office from their O365 "Office" field (best-effort;
+        # only if unset, never clobbering an admin override). See MULTI_LOCATION.md.
+        if claims.office:
+            try:
+                await anyio.to_thread.run_sync(_apply_office_location, uid, claims.office)
+            except Exception:
+                logging.getLogger("cfv.sso").warning("office→location sync failed", exc_info=True)
         outcome = await svc.finish_primary_auth(
             conn, user_id=uid, role=role, ver=ver, remember=False,
             ip_address=ip, user_agent=ua, request_id=rid, mfa=mfa)

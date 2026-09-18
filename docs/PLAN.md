@@ -179,6 +179,17 @@ Rescue the deferred Phase 5 chart and build it out.
 - ✅ **Mobile responsiveness** — off-canvas sidebar + hamburger, topbar/grid/toolbar reflow at ≤768px
 - ✅ Removed the "API connected" sidebar footer; Quick Actions card hidden for accounts without `run:trigger`
 
+## Phase 17 — Multi-location access control ⬜ (spec)
+
+**Spec in `docs/MULTI_LOCATION.md`.** Scope PDFs + users by NYC office (Bronx, 45th,
+Far Rockaway, Jamaica, 27th) so staff see only their office's files.
+
+- ⬜ `location` dimension: `locations` table; `location_id` on pcs/pdfs (stamped at scan) + `user_locations` (m2m)
+- ⬜ User location from the **O365 "Office" field** (Graph `officeLocation`) on SSO login, admin-overridable; alias map for the free-text values
+- ⬜ Server-side scoping helper on every read; `location:all` permission for admin/HQ
+- ⬜ UI: location badge/picker, Admin → Locations page, Users location column
+- ⬜ **Gating question:** can one backend reach every office's lab-PC subnet? (single-instance vs per-site deployment)
+
 ---
 
 ## Ideas parking lot

@@ -109,7 +109,7 @@ def commit_all(only_ids: list[int] | None = None) -> Iterator[str]:
         smbclient.register_session(row["host"], username=src_u, password=src_p, connection_timeout=5)
 
     base_sql = """
-        SELECT id, host, source_path, filename, proposed_name, md5, text_hash
+        SELECT id, host, source_path, filename, proposed_name, md5, text_hash, location_id
         FROM pdfs
         WHERE committed_at IS NULL AND proposed_name IS NOT NULL
     """
@@ -138,6 +138,8 @@ def commit_all(only_ids: list[int] | None = None) -> Iterator[str]:
         # Archived rows are excluded from dedupe: a re-scanned copy of a
         # previously archived file must land in the current day's folder,
         # not be silently deleted as a duplicate of the archived original.
+        # Scoped to the same office (location_id) — a client re-tested at another
+        # office keeps a copy there rather than being deduped away.
         prior = conn.execute(
             """
             SELECT dest_path FROM pdfs
@@ -145,9 +147,10 @@ def commit_all(only_ids: list[int] | None = None) -> Iterator[str]:
               AND committed_at IS NOT NULL
               AND archived_at IS NULL
               AND dest_path IS NOT NULL
+              AND location_id = %s
             LIMIT 1
             """,
-            (row["md5"], row["text_hash"]),
+            (row["md5"], row["text_hash"], row["location_id"]),
         ).fetchone()
 
         if prior:

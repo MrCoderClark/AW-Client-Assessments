@@ -20,7 +20,7 @@ import hashlib
 import hmac
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import Any
 from urllib.parse import urlencode
@@ -53,6 +53,7 @@ class SsoClaims:
     display_name: str | None
     first_name: str | None
     last_name: str | None
+    office: str | None = None   # O365 "Office" (Graph officeLocation) → location mapping
 
 
 # ---------- base64url helpers ---------------------------------------
@@ -322,7 +323,7 @@ class EntraSso:
         if not const_eq(str(payload.get("state", "")), state):
             raise SsoError("state mismatch", reason="state")
 
-        id_token = await self._exchange_code(code=code, verifier=str(payload["verifier"]))
+        id_token, access_token = await self._exchange_code(code=code, verifier=str(payload["verifier"]))
 
         # PyJWKClient.get_signing_key_from_jwt does a BLOCKING urllib fetch, and
         # verify is CPU work — both must run off the event loop. On the loop they
@@ -342,9 +343,35 @@ class EntraSso:
                 tenant_id=self.s.entra_tenant_id,
             )
 
-        return await anyio.to_thread.run_sync(_verify_sync)
+        claims = await anyio.to_thread.run_sync(_verify_sync)
+        # Best-effort: enrich with the O365 "Office" field (Graph) so the caller
+        # can map it to a location. No-ops to None if User.Read isn't consented.
+        office = await self._fetch_office(access_token)
+        return replace(claims, office=office)
 
-    async def _exchange_code(self, *, code: str, verifier: str) -> str:
+    async def _fetch_office(self, access_token: str) -> str | None:
+        """The user's O365 Office (Graph `officeLocation`), best-effort.
+
+        Returns None unless User.Read is consented and the access token is
+        Graph-capable — so location auto-assignment stays dormant until the
+        scope is granted in Entra, then lights up with no code change.
+        """
+        if not access_token:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.get(
+                    "https://graph.microsoft.com/v1.0/me?$select=officeLocation",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+            if r.status_code == 200:
+                val = r.json().get("officeLocation")
+                return str(val).strip() if val else None
+        except httpx.HTTPError:
+            pass
+        return None
+
+    async def _exchange_code(self, *, code: str, verifier: str) -> tuple[str, str]:
         data = {
             "client_id": self.s.entra_client_id,
             "grant_type": "authorization_code",
@@ -375,5 +402,6 @@ class EntraSso:
         id_token = body.get("id_token")
         if not id_token:
             raise SsoError("token response missing id_token", reason="token")
-        # The Entra access_token is intentionally discarded — we call no Graph APIs.
-        return str(id_token)
+        # access_token drives a best-effort Graph /me officeLocation lookup for
+        # location mapping; empty / non-Graph if User.Read isn't consented.
+        return str(id_token), str(body.get("access_token") or "")

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconArchive, IconDashboard, IconFiles, IconLayout, IconLogs, IconMonitor, IconSettings, IconShield, IconUsers } from "./icons";
+import { IconArchive, IconDashboard, IconFiles, IconLayout, IconLogs, IconMapPin, IconMonitor, IconSettings, IconShield, IconUsers } from "./icons";
 import { Logo } from "./logo";
 import { useAuth } from "./auth-provider";
 
@@ -28,6 +28,7 @@ const NAV: NavItem[] = [
   { href: "/admin/profiles", label: "Profiles", icon: IconLayout,  enabled: true, perm: "user:write", hiddenForRoles: [] },
   { href: "/admin/archive",  label: "Archive",  icon: IconArchive, enabled: true, perm: "pdf:archive", hiddenForRoles: [] },
   { href: "/admin/security", label: "Security", icon: IconShield,   enabled: true, perm: "system:write", hiddenForRoles: [] },
+  { href: "/admin/locations", label: "Locations", icon: IconMapPin, enabled: true, perm: "system:write", hiddenForRoles: [] },
   { href: "/settings",       label: "Settings", icon: IconSettings, enabled: true, perm: "schedule:write", hiddenForRoles: [] },
 ];
 

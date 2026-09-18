@@ -29,6 +29,7 @@ _ADMIN = frozenset({
     "security:read", "security:write",
     "system:read", "system:write",
     "api_key:read", "api_key:write",
+    "location:all",  # see/act across every office; bypasses location scoping
 })
 
 _OPERATOR = frozenset({

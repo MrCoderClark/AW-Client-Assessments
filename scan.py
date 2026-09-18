@@ -17,7 +17,7 @@ import smbclient
 from pypdf import PdfReader
 
 from classify import detect_assessment, detect_name, proposed_filename
-from db import connect, content_duplicate_exists, existing_fingerprint, finish_run, start_run, upsert, upsert_pc_status
+from db import connect, content_duplicate_exists, existing_fingerprint, finish_run, pc_location_id, start_run, upsert, upsert_pc_status
 from pcs import PCS
 from unlock import kill_pdf_readers
 
@@ -115,6 +115,7 @@ def _scan_pc(pc_name: str, host: str, conn, week_start, week_end, user: str, pas
     smbclient.register_session(host, username=user, password=password, connection_timeout=CONNECT_TIMEOUT)
     base = rf"\\{host}\C$\Users\{USER_PROFILE}"
     counts = {"seen": 0, "new": 0, "updated": 0, "unchanged": 0, "noassess": 0, "locked": 0, "duplicate": 0}
+    loc_id = pc_location_id(conn, pc_name)  # office this PC belongs to; stamped on every PDF
 
     for folder in FOLDERS:
         root = rf"{base}\{folder}"
@@ -170,7 +171,7 @@ def _scan_pc(pc_name: str, host: str, conn, week_start, week_end, user: str, pas
             # future scan). Archived matches are ignored so a re-scanned copy of
             # an archived file still re-commits to today's folder.
             th = text_hash(text)
-            if content_duplicate_exists(conn, host, path, md5, th):
+            if content_duplicate_exists(conn, host, path, md5, th, loc_id):
                 counts["duplicate"] += 1
                 yield f"    [dup-skip] {fname} — content already indexed; source left in place"
                 continue
@@ -182,7 +183,7 @@ def _scan_pc(pc_name: str, host: str, conn, week_start, week_end, user: str, pas
                 conn, host=host, source_path=path, filename=fname,
                 proposed_name=new_name, assessment_type=assessment,
                 first_name=first, last_name=last, size=st.st_size,
-                mtime=mtime.isoformat(), md5=md5, text_hash=th,
+                mtime=mtime.isoformat(), md5=md5, text_hash=th, location_id=loc_id,
             )
             yield f"    [{action}] {fname}  →  {new_name}"
 
