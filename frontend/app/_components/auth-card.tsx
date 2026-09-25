@@ -13,7 +13,7 @@ export function Card({ children }: { children: React.ReactNode }) {
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22 }}>
           <Logo />
-          <span style={{ fontWeight: 600, fontSize: 15, letterSpacing: "-0.01em" }}>Client Viewer</span>
+          <span style={{ fontWeight: 600, fontSize: 15, letterSpacing: "-0.01em" }}>Assessments Viewer</span>
         </div>
         {children}
       </div>

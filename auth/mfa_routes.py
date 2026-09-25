@@ -176,24 +176,6 @@ async def enroll_verify(
     return await _complete(conn, response, request, svc, mfa, ch, backup_codes=backup_codes)
 
 
-@router.post("/email/send")
-async def email_send(
-    conn: Annotated[AsyncConnection, DbConn],
-    mfa: Annotated[MfaService, Depends(dep_mfa_service)],
-    cookie: MfaCookie = None,
-):
-    ch = await _challenge(conn, mfa, cookie)
-    if ch.purpose != "verify":
-        raise HTTPException(status_code=400, detail="email codes are for verification only")
-    r = await conn.execute(
-        text("SELECT email, display_name, first_name FROM users WHERE id = :id"), {"id": ch.user_id})
-    row = r.first()
-    ok, _note = await mfa.send_email_code(
-        conn, ch.id, email=str(row.email), name=(row.display_name or row.first_name))
-    # Generic response — never reveal delivery detail to an unauthenticated caller.
-    return {"ok": bool(ok)}
-
-
 @router.post("/verify", response_model=MfaResult)
 async def verify(
     body: VerifyBody,
@@ -209,10 +191,13 @@ async def verify(
         raise HTTPException(status_code=400, detail="this account must finish enrolment")
     if body.method == "totp":
         ok = await mfa.verify_totp(conn, ch.user_id, body.code)
-    elif body.method == "email":
-        ok = await mfa.verify_email_code(conn, ch.id, body.code)
-    else:  # backup
+    elif body.method == "backup":
         ok = await mfa.verify_backup(conn, ch.user_id, body.code)
+    else:  # email codes are disabled — self-service email OTP was removed
+        raise HTTPException(
+            status_code=400,
+            detail="Email codes are disabled. Use your authenticator app or a backup "
+                   "code — if you can't, contact IT Support.")
     if not ok:
         await _record_failure(mfa, conn, ch.id)
     return await _complete(conn, response, request, svc, mfa, ch)

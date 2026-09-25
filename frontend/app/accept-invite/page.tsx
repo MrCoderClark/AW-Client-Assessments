@@ -37,7 +37,7 @@ function InnerAcceptInvite() {
     <Card>
       <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 6 }}>Set up your account</h1>
       <p className="mute" style={{ fontSize: 12.5, marginBottom: 22 }}>
-        Choose a password to activate your Client Viewer account.
+        Choose a password to activate your Client Assessments Viewer account.
       </p>
 
       <form onSubmit={submit}>
@@ -54,7 +54,7 @@ function InnerAcceptInvite() {
         {err && <ErrBox>{err}</ErrBox>}
 
         <button type="submit" disabled={busy} className="btn btn-primary"
-                style={{ marginTop: 20, width: "100%", justifyContent: "center", height: 38, fontSize: 13 }}>
+          style={{ marginTop: 20, width: "100%", justifyContent: "center", height: 38, fontSize: 13 }}>
           {busy ? "Activating…" : "Activate & sign in"}
         </button>
       </form>

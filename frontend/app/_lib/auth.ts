@@ -169,13 +169,7 @@ export async function mfaEnrollVerify(code: string): Promise<{ me: Me; backupCod
   return { me: await consumeSession(j), backupCodes: (j.backup_codes ?? []) as string[] };
 }
 
-export async function mfaEmailSend(): Promise<boolean> {
-  const r = await postJson("/api/v1/auth/mfa/email/send", {});
-  await throwIfBad(r);
-  return Boolean((await r.json()).ok);
-}
-
-export async function mfaVerify(code: string, method: "totp" | "email" | "backup"): Promise<Me> {
+export async function mfaVerify(code: string, method: "totp" | "backup"): Promise<Me> {
   const r = await postJson("/api/v1/auth/mfa/verify", { code, method });
   await throwIfBad(r);
   return consumeSession(await r.json());

@@ -33,7 +33,7 @@ export function LoginShell({ children }: { children: React.ReactNode }) {
         <div>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img className="login-brand-logo" src="/aw-general-logo.png"
-               alt="America Works — Network of Companies" />
+            alt="America Works — Network of Companies" />
           <h2 className="login-brand-title">
             Client assessments,<br />organized and<br />
             <span className="accent">secure.</span>
@@ -57,7 +57,7 @@ export function LoginShell({ children }: { children: React.ReactNode }) {
         <div className="login-card">
           <div className="login-card-brand">
             <Logo />
-            <span>Client Viewer</span>
+            <span>Assessments Viewer</span>
           </div>
           {children}
         </div>
@@ -70,7 +70,7 @@ export function LoginShell({ children }: { children: React.ReactNode }) {
 function IconClassify() {   // a document → discovered + classified/renamed
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
       <path d="M14 3v5h5" /><path d="M9 13h6M9 17h4" />
     </svg>
@@ -79,7 +79,7 @@ function IconClassify() {   // a document → discovered + classified/renamed
 function IconArchive() {    // a box → committed to the network share
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3" y="4" width="18" height="4" rx="1" />
       <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" /><path d="M10 12h4" />
     </svg>
@@ -88,7 +88,7 @@ function IconArchive() {    // a box → committed to the network share
 function IconAudit() {      // a checked clipboard → hash-chained audit trail
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
       <rect x="8" y="3" width="8" height="4" rx="1" />
       <path d="M9 14l2 2 4-4" />
@@ -168,7 +168,7 @@ export function PasswordLoginForm({ showForgot }: { showForgot: boolean }) {
 
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, cursor: "pointer", fontSize: 12.5 }}>
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)}
-               style={{ width: 14, height: 14, cursor: "pointer" }} />
+          style={{ width: 14, height: 14, cursor: "pointer" }} />
         Keep me signed in
       </label>
 
@@ -193,7 +193,7 @@ export function PasswordLoginForm({ showForgot }: { showForgot: boolean }) {
 
       {showForgot && (
         <a href="/forgot-password" className="mute"
-           style={{ display: "block", textAlign: "center", marginTop: 14, fontSize: 12, textDecoration: "none" }}>
+          style={{ display: "block", textAlign: "center", marginTop: 14, fontSize: 12, textDecoration: "none" }}>
           Forgot your password?
         </a>
       )}

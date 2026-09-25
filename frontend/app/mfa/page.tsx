@@ -12,14 +12,13 @@ import {
 } from "../_components/login-card";
 import {
   mfaChallenge,
-  mfaEmailSend,
   mfaEnrollStart,
   mfaEnrollVerify,
   mfaVerify,
 } from "../_lib/auth";
 
 type Step = "loading" | "enroll" | "backup" | "verify";
-type Method = "totp" | "email" | "backup";
+type Method = "totp" | "backup";
 
 const groups = (s: string) => (s.match(/.{1,4}/g) ?? []).join(" ");
 
@@ -33,7 +32,6 @@ export default function MfaPage() {
   const [otpauth, setOtpauth] = useState("");
   const [qr, setQr] = useState<string | null>(null);
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
-  const [emailSent, setEmailSent] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const started = useRef(false);
@@ -99,18 +97,6 @@ export default function MfaPage() {
     }
   };
 
-  const sendEmail = async () => {
-    setErr(null);
-    try {
-      await mfaEmailSend();
-      setMethod("email");
-      setEmailSent(true);
-      setCode("");
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   if (step === "loading") {
     return (
       <LoginShell>
@@ -156,8 +142,6 @@ export default function MfaPage() {
         subtitle={
           enrolling
             ? "Add this account to an authenticator app (Microsoft/Google Authenticator, Authy…), then enter the 6-digit code it shows."
-            : method === "email"
-            ? "Enter the 6-digit code we emailed you."
             : method === "backup"
             ? "Enter one of your saved backup codes."
             : "Enter the 6-digit code from your authenticator app."
@@ -227,11 +211,6 @@ export default function MfaPage() {
           {method !== "totp" && (
             <button className="linklike" onClick={() => { setMethod("totp"); setCode(""); setErr(null); }}
               style={linkBtn}>Use authenticator app instead</button>
-          )}
-          {method !== "email" && (
-            <button className="linklike" onClick={sendEmail} style={linkBtn}>
-              {emailSent ? "Resend email code" : "Email me a code instead"}
-            </button>
           )}
           {method !== "backup" && (
             <button className="linklike" onClick={() => { setMethod("backup"); setCode(""); setErr(null); }}

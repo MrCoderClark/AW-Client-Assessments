@@ -60,7 +60,7 @@ export default function LoginPage() {
     <LoginShell>
       <LoginHeading
         title="Sign in"
-        subtitle="Use your work account. Contact IT Support if you need help signing in."
+        subtitle="Sign in using your America Works Microsoft account. Need help? Contact IT Support."
       />
 
       {ssoError && <LoginError>{ssoError}</LoginError>}
